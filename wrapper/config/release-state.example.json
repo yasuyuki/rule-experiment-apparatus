@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 3,
+  "generation": 0,
+  "baseline": {
+    "name": "foundation-example-baseline",
+    "instance": "stable",
+    "path": "/home/<stable-user>/releases/foundation-example-baseline",
+    "gitRef": "main"
+  },
+  "run": null,
+  "previousBaseline": null,
+  "lastTransition": {
+    "action": "bootstrap",
+    "at": "2000-01-01T00:00:00.0000000+00:00",
+    "from": "none",
+    "to": "foundation-example-baseline",
+    "commit": "0000000000000000000000000000000000000000"
+  },
+  "transitionHistory": [
+    {
+      "action": "bootstrap",
+      "at": "2000-01-01T00:00:00.0000000+00:00",
+      "from": "none",
+      "to": "foundation-example-baseline",
+      "commit": "0000000000000000000000000000000000000000"
+    }
+  ]
+}

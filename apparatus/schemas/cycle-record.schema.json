@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/apparatus/cycle-record.schema.json",
+  "title": "Cycle record (schemaVersion 2)",
+  "description": "サイクル記録の形の唯一の正本。必須キー・型・enum・値域はここだけに書く。criteria が 1..N 過不足なく1回ずつであること、アーム間の等値、フィールド間の比較、宣言との突き合わせは JSON Schema で書けないので、ここには書かず cycle.py の validate_record() が持つ。記入基準は docs/CYCLE-RECORD-CRITERIA.md。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "cycle",
+    "experiment",
+    "recordedAt",
+    "subject",
+    "subjectVersion",
+    "baseCommit",
+    "measurementSha256",
+    "arms"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "cycle": { "$ref": "#/$defs/identifier" },
+    "experiment": { "$ref": "#/$defs/identifier" },
+    "recordedAt": { "$ref": "#/$defs/timestamp" },
+    "subject": { "type": "string", "minLength": 1 },
+    "subjectVersion": { "type": "string", "minLength": 1 },
+    "baseCommit": { "$ref": "#/$defs/gitObject" },
+    "measurementSha256": { "$ref": "#/$defs/sha256" },
+    "arms": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "role",
+          "variant",
+          "variantTree",
+          "variantInjectionCommit",
+          "armCommit",
+          "transcript",
+          "transcriptsDiscovered",
+          "baselinePath",
+          "baselineSha256",
+          "baselineRecordedAt",
+          "workloadSha256",
+          "judgeSha256",
+          "judgeExitCode",
+          "criteria"
+        ],
+        "properties": {
+          "id": { "$ref": "#/$defs/identifier" },
+          "role": {
+            "description": "control は対照アーム。それ以外の比較条件は treatment。",
+            "enum": ["control", "treatment"]
+          },
+          "variant": { "$ref": "#/$defs/identifier" },
+          "variantTree": { "$ref": "#/$defs/gitObject" },
+          "variantInjectionCommit": {
+            "description": "materialize が <release>/materialized.json に残した注入 commit。照合が行われた証拠。",
+            "$ref": "#/$defs/gitObject"
+          },
+          "armCommit": { "$ref": "#/$defs/gitObject" },
+          "transcript": {
+            "description": "判定器へ渡した参加セッション1件の絶対パス（subject 側の隔離先の中）。transcriptsDiscovered に含まれる。",
+            "type": "string",
+            "minLength": 1
+          },
+          "transcriptsDiscovered": {
+            "description": "config root で発見した全 transcript の絶対パス。選ばなかったものも残す。1件以上。",
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "sessions": {
+            "description": "任意。発見した各セッションの tool / path / span / assistantCount / 所属。既存記録（001/002）には無い。",
+            "type": "array",
+            "items": { "$ref": "#/$defs/session" }
+          },
+          "baselinePath": {
+            "description": "judge が判定器の --baseline へ実際に渡した baseline manifest の絶対パス（distro 内）。",
+            "type": "string",
+            "minLength": 1
+          },
+          "baselineSha256": {
+            "description": "その baseline manifest の sha256（distro 内で採取）。",
+            "$ref": "#/$defs/sha256"
+          },
+          "baselineRecordedAt": {
+            "description": "その baseline manifest の mtime（distro 内）。recordedAt より前であることの照合はフィールド間比較なので validate_record() が持つ。",
+            "$ref": "#/$defs/timestamp"
+          },
+          "workloadSha256": { "$ref": "#/$defs/sha256" },
+          "judgeSha256": { "$ref": "#/$defs/sha256" },
+          "judgeExitCode": {
+            "description": "判定器の終了コード。0 は全 criterion が met、1 は met でないものがある。これ以外は判定器が走り切っていないので記録されない。",
+            "enum": [0, 1]
+          },
+          "criteria": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/criterion" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "gitObject": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    },
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["criterion", "text", "result", "evidence"],
+      "properties": {
+        "criterion": { "type": "integer", "minimum": 1 },
+        "text": { "type": "string", "minLength": 1 },
+        "result": { "enum": ["met", "not-met", "unknown"] },
+        "evidence": { "type": "string", "minLength": 1 }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "path", "span", "assistantCount", "belonging"],
+      "properties": {
+        "tool": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "span": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "properties": {
+            "start": {
+              "oneOf": [
+                { "type": "null" },
+                { "$ref": "#/$defs/timestamp" }
+              ]
+            },
+            "end": {
+              "oneOf": [
+                { "type": "null" },
+                { "$ref": "#/$defs/timestamp" }
+              ]
+            }
+          }
+        },
+        "assistantCount": { "type": "integer", "minimum": 0 },
+        "belonging": {
+          "enum": ["belongs", "does-not-belong", "unclassifiable"]
+        },
+        "belongingReason": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "id": "cursor-agent",
+  "isolationEnv": "XDG_CONFIG_HOME",
+  "isolationComplete": false,
+  "versionCommand": "cursor-agent --version",
+  "binary": "cursor-agent",
+  "configRoot": {
+    "alwaysApplyFile": null,
+    "emptyRulesDir": null,
+    "credentialDest": "cursor/auth.json",
+    "credentialSource": null
+  },
+  "workspacePlacement": [
+    { "path": ".cursor/rules/*.mdc", "proven": true },
+    { "path": "AGENTS.md", "proven": true },
+    { "path": ".cursorrules", "proven": true }
+  ],
+  "configRootPlacement": null,
+  "keepEmpty": ["AGENTS.md", ".cursorrules"],
+  "sharedPlacement": [
+    { "path": ".cursor/rules/*.mdc", "subjects": ["cursor-agent", "cursor-gui"] },
+    { "path": "AGENTS.md", "subjects": ["codex", "cursor-agent"] }
+  ],
+  "transcripts": {
+    "glob": "projects/*/agent-transcripts/*/*.jsonl",
+    "searchRoot": "home-cursor",
+    "armBinding": "cursor-project-slug",
+    "participation": { "jsonlField": "role", "equals": "assistant" }
+  },
+  "login": "browser"
+}

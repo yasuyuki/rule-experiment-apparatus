@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/apparatus/estimator.schema.json",
+  "title": "Estimator descriptor",
+  "description": "推定器の identity は components だけから決まる（content_hash(components)）。id と note は identity 計算に含めない。推定器の中身（LLM か統計かヒューリスティックか）は装置へ焼き込まない（憲法 不変条件 2 と同型）。置き場は装置の外（private-control/estimators/<id>.json）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "id", "components"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "estimator" },
+    "id": { "$ref": "#/$defs/identifier" },
+    "components": {
+      "description": "identity = content_hash(components)。LLM なら model と prompt の版など、識別子の元になる値だけを持つ。",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z0-9._-]+$": { "type": "string", "minLength": 1 }
+      }
+    },
+    "artifacts": {
+      "description": "components のキー名 → estimators/ 配下のファイル名。各ファイルの sha256 が components[key] と一致することを load_estimator が照合する。identity 計算には含めない。",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z0-9._-]+$": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        }
+      }
+    },
+    "note": { "type": "string" }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    }
+  }
+}

@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/private-control/environment.schema.json",
+  "title": "Foundation control environment configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "cursor",
+    "instances",
+    "controlPlane",
+    "repositoryDiscovery",
+    "storage",
+    "workspace",
+    "projects"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 2
+    },
+    "cursor": {
+      "$ref": "#/$defs/cursor"
+    },
+    "instances": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stable", "candidate"],
+      "properties": {
+        "stable": { "$ref": "#/$defs/instance" },
+        "candidate": { "$ref": "#/$defs/instance" }
+      }
+    },
+    "controlPlane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gitInstance"],
+      "properties": {
+        "gitInstance": { "type": "string", "minLength": 1 }
+      }
+    },
+    "repositoryDiscovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namePatterns", "origins"],
+      "properties": {
+        "namePatterns": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "origins": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backupRoot", "verificationRoot", "localDataRoot"],
+      "properties": {
+        "backupRoot": { "$ref": "#/$defs/configRelativeWindowsPath" },
+        "verificationRoot": { "$ref": "#/$defs/configRelativeWindowsPath" },
+        "localDataRoot": { "type": "string", "minLength": 1 }
+      }
+    },
+    "workspace": {
+      "$ref": "#/$defs/workspace"
+    },
+    "projects": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/project" }
+    }
+  },
+  "$defs": {
+    "configRelativeWindowsPath": {
+      "type": "string",
+      "minLength": 1,
+      "allOf": [
+        { "not": { "pattern": "^[A-Za-z]:[\\\\/]" } },
+        { "not": { "pattern": "^\\\\" } },
+        { "not": { "pattern": "^/" } },
+        { "not": { "pattern": "%[^%]+%" } }
+      ]
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repositories"],
+      "properties": {
+        "repositories": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workspaceRepository" }
+        }
+      }
+    },
+    "workspaceRepository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relativePath", "origin"],
+      "properties": {
+        "relativePath": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!\\.($|/)|\\.\\.|/)(?!.*(/\\.\\.|/\\./|/\\.$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"
+        },
+        "origin": { "type": "string", "minLength": 1 }
+      }
+    },
+    "cursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executable"],
+      "properties": {
+        "executable": { "type": "string", "minLength": 1 }
+      }
+    },
+    "instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wslDistro",
+        "wslUser",
+        "wslHome",
+        "projectsRoot",
+        "userProfile",
+        "userDataDir",
+        "extensionsDir"
+      ],
+      "properties": {
+        "wslDistro": { "type": "string", "minLength": 1 },
+        "wslUser": { "type": "string", "minLength": 1 },
+        "wslHome": { "type": "string", "minLength": 1 },
+        "projectsRoot": { "type": "string", "minLength": 1 },
+        "releasesRoot": { "type": "string", "minLength": 1 },
+        "userProfile": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/configRelativeWindowsPath" }
+          ]
+        },
+        "userDataDir": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/configRelativeWindowsPath" }
+          ]
+        },
+        "extensionsDir": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/configRelativeWindowsPath" }
+          ]
+        }
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/projectTarget" }
+    },
+    "projectTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "path"],
+          "properties": {
+            "kind": { "const": "windows" },
+            "path": { "$ref": "#/$defs/configRelativeWindowsPath" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "path"],
+          "properties": {
+            "kind": { "const": "wsl" },
+            "path": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "authority", "path", "expectedUser"],
+          "properties": {
+            "kind": { "const": "ssh" },
+            "authority": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+            "path": { "type": "string", "pattern": "^/[A-Za-z0-9._/-]*$" },
+            "expectedUser": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$" }
+          }
+        }
+      ]
+    }
+  }
+}

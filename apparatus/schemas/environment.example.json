@@ -1,0 +1,6 @@
+{
+  "host": "unix",
+  "distro": "<distro>",
+  "user": "<wsl-user>",
+  "agentRulesRoot": "../agent-rules"
+}

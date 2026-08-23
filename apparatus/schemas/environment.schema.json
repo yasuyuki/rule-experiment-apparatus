@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/apparatus/environment.schema.json",
+  "title": "Apparatus environment descriptor",
+  "description": "アーム実体化先の環境。実値はリポジトリ外（private-control/apparatus-environment.json）。このスキーマは形だけを縛る。",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "distro", "user"],
+      "properties": {
+        "host": { "const": "unix" },
+        "distro": { "type": "string", "minLength": 1 },
+        "user": { "type": "string", "minLength": 1 },
+        "agentRulesRoot": { "type": "string", "minLength": 1 }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host"],
+      "properties": {
+        "host": { "const": "windows" },
+        "agentRulesRoot": { "type": "string", "minLength": 1 }
+      }
+    }
+  ]
+}

@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/apparatus/cycle.schema.json",
+  "title": "Cycle declaration",
+  "description": "比較キーを持つサイクル宣言。base / readableMeta / metaReadabilityHash は任意（既存 001/002 互換）。materialize は base 必須をコード側で要求する。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "cycle",
+    "experiment",
+    "subject",
+    "workloadHash",
+    "measurementHash",
+    "sessionContractHash",
+    "executionUnitHash",
+    "arms"
+  ],
+  "dependentRequired": {
+    "readableMeta": ["metaReadabilityHash"],
+    "metaReadabilityHash": ["readableMeta"]
+  },
+  "allOf": [
+    {
+      "if": {
+        "not": {
+          "properties": { "kind": { "const": "estimation" } },
+          "required": ["kind"]
+        }
+      },
+      "then": { "required": ["judgeHash"] }
+    }
+  ],
+  "properties": {
+    "cycle": { "$ref": "#/$defs/identifier" },
+    "experiment": { "$ref": "#/$defs/identifier" },
+    "kind": { "enum": ["measurement", "estimation"] },
+    "subject": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      ]
+    },
+    "subjectVersion": { "type": "string", "minLength": 1 },
+    "workloadHash": { "$ref": "#/$defs/sha256" },
+    "measurementHash": { "$ref": "#/$defs/sha256" },
+    "judgeHash": { "$ref": "#/$defs/sha256" },
+    "sessionContractHash": { "$ref": "#/$defs/sha256" },
+    "executionUnitHash": { "$ref": "#/$defs/sha256" },
+    "base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "commit"],
+      "properties": {
+        "repo": { "type": "string", "minLength": 1 },
+        "commit": { "$ref": "#/$defs/gitObject" }
+      }
+    },
+    "readableMeta": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[^\\\\]+$"
+      }
+    },
+    "metaReadabilityHash": { "$ref": "#/$defs/sha256" },
+    "arms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "role", "variant", "variantTree"],
+        "properties": {
+          "id": { "$ref": "#/$defs/identifier" },
+          "role": { "enum": ["control", "treatment"] },
+          "variant": { "$ref": "#/$defs/identifier" },
+          "variantTree": { "$ref": "#/$defs/gitObject" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "gitObject": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    }
+  }
+}
