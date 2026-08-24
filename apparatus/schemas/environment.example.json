@@ -1,6 +1,11 @@
 {
-  "host": "unix",
-  "distro": "<distro>",
-  "user": "<wsl-user>",
-  "agentRulesRoot": "../agent-rules"
+  "executor": { "kind": "local-posix" },
+  "variantSourceRoot": "<private-versioned-variant-source>",
+  "stableRules": {
+    "root": "<stable-rule-source-repository>",
+    "branch": "main"
+  },
+  "subjects": {
+    "claude-code": { "configTemplate": "<private-authenticated-config-template>" }
+  }
 }

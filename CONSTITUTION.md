@@ -1,11 +1,10 @@
 # CONSTITUTION — ルール実験装置
 
 この文書は `rule-experiment-system` システム（`rule-experiment-apparatus` +
-`private-control`）が**何のために存在するか**の正本である。
+`foundation-control`）が**何のために存在するか**の正本である。
 
-用語は [`TERMS.md`](TERMS.md) が定義する。本文は実験の語彙（アーム・変種・固定・照合）で
-書き、release 機構の語（`run` / `seed` / `promote` など）は機構そのものを指すとき
-だけ使う。
+用語は [`TERMS.md`](TERMS.md) が定義する。本文は実験の語彙（base・baseline・
+variant・アーム・固定・照合）で書く。
 
 装置を操作する主体を `controller`、注入済み変種の下で逐語の `workload.md` を
 実行する被験主体を `subject`、実験を回せる状態を作る主体を `provisioner` と呼ぶ。
@@ -13,15 +12,11 @@
 実験の単位は **実験 / サイクル / アーム / 実行** の階層で数える。各語の定義と
 階層図は `TERMS.md`。
 
-アームは受理済み Git 状態である baseline を複製して起こす。baseline は全アームの
-共有 base である（不変条件 6）。base そのものを対照に使う実験では、baseline が
-対照アームを務める。
+アームは同一の workload repository commit（base）から起こし、各アームへ rule-source
+tree を注入する。baseline は検証済みの stable rule-source tree であり、base とは別物である。
 
-**アームは同時に複数あってよい。** 対照アームと処置アームを同一 base から同時に
-立てる実験があるためである。ただし **アームを増やすために instance を増やさない。
-隔離は instance ではなく subject の config root が担う。** 物理 instance と
-baseline / run の対応、およびそれが状態遷移で入れ替わらないことは
-`docs/RULE-EXPERIMENT.md` §0。
+計測サイクルは対照アーム1件と処置アーム1件、推定サイクルはアーム1件である。
+隔離は arm と subject ごとの config root が担う。
 
 固定（promote）の対象にできるアームは、一度に1つである。
 
@@ -30,7 +25,7 @@ baseline / run の対応、およびそれが状態遷移で入れ替わらな�
 残っている。以下を明文化してその余地を塞ぐ。
 
 **この憲法が拘束するのは、装置を開発・拡張する側**（装置リポジトリで作業する
-セッション、wrapper の変更者、フェーズを実行するエージェント）**であって、
+セッション、`cycle.py` の変更者、フェーズを実行するエージェント）**であって、
 subject 側ではない。** アームの中の実行はこの憲法を読まない。読ませると
 全実験に共通の交絡因子が入る（不変条件 8）。
 
@@ -49,8 +44,9 @@ subject 側ではない。** アームの中の実行はこの憲法を読まな
 
 **ルール変更がエージェントの行動を変えるかを計測する装置。**
 
-release 機構（seed / accept / protect / review / promote）は目的ではなく、
-「同一 base から独立したアームを起こし、結果を記録つきで残す」ための土台である。
+`materialize` / `handoff` / `judge` / `promote` / `rollback` は目的ではなく、
+「同一 base から独立したアームを起こし、結果を記録し、検証済み source を
+baseline に反映する」ための実装である。
 
 装置が回す操作は次の4つだけ。これ以外の操作を装置の機能として増やさない。
 
@@ -61,8 +57,7 @@ release 機構（seed / accept / protect / review / promote）は目的ではな
 | **改良再実行** | 変種だけを変えて再実行し、差分を見る |
 | **推定** | 再実行が非現実的な workload の1実行から、凍結入力に推定器を当てて変種の効果を見積もる |
 
-各操作の手順は `docs/RULE-EXPERIMENT.md` §5、推定の設計は同 §7。機構の語
-（`seed` / `promote` など）との対応は `TERMS.md`。
+各操作の手順は `docs/RULE-EXPERIMENT.md` §5、推定の設計は同 §7。
 
 再計測は「同一変種・同一 workload で再実行できる」ことを前提にする。workload が
 巨大で再実行が非現実的なとき、この前提が崩れる。推定はその場合の縮退操作であり、
@@ -99,7 +94,7 @@ release 機構（seed / accept / protect / review / promote）は目的ではな
 
 **正規用語は [`TERMS.md`](TERMS.md) を正本とする。** 実験の単位（実験 / サイクル /
 アーム / 実行）、主体（controller / subject / provisioner）、比較・計測・推定に
-関する語、release 機構の語との対応、および用語の規律はすべてそこにある。
+関する語および用語の規律はすべてそこにある。
 
 この憲法・下位文書・新設する文書は、`TERMS.md` にある概念を別の語で言い換えない。
 `TERMS.md` は用語の意味だけを定め、**原則を足したり緩めたりしない。**
@@ -109,8 +104,8 @@ release 機構（seed / accept / protect / review / promote）は目的ではな
 次はいずれも**この装置の目的ではない**。該当する機能追加は、他にどれだけ
 正当な理由があってもここへ足さない。
 
-- **汎用リリース管理・デプロイ基盤ではない。** release 機構は実験アームを作る
-  手段であって、成果物を配る仕組みではない
+- **汎用リリース管理・デプロイ基盤ではない。** `materialize` は実験アームを
+  作る手段であって、成果物を配る仕組みではない
 - **ルール配布機構ではない。** 変種を複数環境へ行き渡らせることは目的ではない。
   注入は計測のための一時的な操作である
 - **CI ではない。** 自動実行・定期実行・パイプライン化は目的ではない。1サイクルは
@@ -126,9 +121,7 @@ release 機構（seed / accept / protect / review / promote）は目的ではな
 - **開発環境を規定する場ではない。** アプリや装置の開発をどの環境（Windows / WSL /
   その他）で行うかは作業者が選ぶ。**環境を自由に選べること自体が前提であり、装置は
   その選択を制約せず、特定の環境を前提にもしない。** 環境固有の値は
-  `environment.json` が持つ。なお現行 wrapper が Windows + PowerShell を要求するのは
-  実装の制約であって、この憲法が環境を定めているのではない（不変条件 4 が特定の
-  配置経路を名指ししないのと同じ理由）
+  environment descriptor が持つ。core executor は WSL または local POSIX とする
 
 ## 4. 不変条件
 
@@ -139,7 +132,7 @@ release 機構（seed / accept / protect / review / promote）は目的ではな
 
 比較キーは次で構成する。
 
-- base（同じ baseline から seed した commit）
+- base（全アームが共有する workload repository commit）
 - 変種
 - `workload.md`
 - 計測定義（計測仕様の版）
@@ -169,7 +162,7 @@ release 機構（seed / accept / protect / review / promote）は目的ではな
 
 `obeyed`（行動が変わったか）と `attributable`（ルールが無くても同じ行動を
 しなかったか）の判定は、**ルール本文を見て実験ごとに導出する**。判定方法を
-wrapper・スキーマ・テンプレートへ焼き込まない。
+core・スキーマ・テンプレートへ焼き込まない。
 
 唯一の例外は `loaded`（ルールが文脈に入ったか）で、これは全変種共通の marker
 `[<experiment>:<variant>]` を1回出す指示として**装置が共通に提供する**。
@@ -205,20 +198,21 @@ marker が出ることを確認してから `proven` にする。この確認は
 実証の手順、subject 記述子による配置経路の保持、marker が出なかったときの扱いは
 `docs/RULE-EXPERIMENT.md` §8。
 
-### (5) 変種の正本は release worktree の外に置く
+### (5) 変種の正本はアーム worktree の外に置く
 
-seed は baseline を複製する。run にだけ入れた変種は次の seed で消える。だから変種の
-正本は release worktree の外の版管理下に置き、**毎サイクルそこから注入する。手打ちしない。**
+`materialize` は宣言された base からアームを毎回作る。アームだけに手打ちした変種は
+次のサイクルに残らない。だから変種の正本はアーム worktree の外の版管理下に置き、
+**毎サイクルそこから注入する。手打ちしない。**
 正本の同一性は内容から決まる識別子で表し、注入のたびに照合する。
 
 正本の現在の置き場、同一性の表し方、照合の実装は `docs/RULE-EXPERIMENT.md` §5.1。
 
-### (6) baseline は全アームの共有 base。直接書き込ませない
+### (6) base は全アームで共有し、baseline に直接書き込ませない
 
-baseline が動くと、以後の全サイクルが同じ base から seed しなくなり、比較条件が
-崩れる。同一サイクル内の複数アームも同じ base から起こす。公開機構は
-baseline を対象にした直接書き込みを拒否しなければならない。内部実装にも、任意の
-baseline 変更を公開操作へ迂回させる抜け道を作らない。
+同一サイクル内の全アームは同じ base commit から起こす。base が異なれば、workload
+repository の差分と variant の差分を分離できない。baseline は検証済み stable
+rule-source tree であり、公開機構はこれへの直接書き込みを拒否しなければならない。
+内部実装にも、任意の baseline 変更を公開操作へ迂回させる抜け道を作らない。
 
 baseline を変える唯一の入口は promote（＝固定）と rollback（固定の取り消し）である。
 
@@ -289,33 +283,8 @@ identity に何を含めるか、handoff が具体的に何を照合するかは
 
 ## 5. 機能追加の適合判定
 
-**実験を回す操作**（§1 の4操作）に関わる機能・ワークフロー・スクリプト・自動化を
-足す前に、次の3問へ答える。前提条件を確立する操作（§1）にはこの判定を適用せず、
-同節の3条件で縛る。
-
-1. **どの操作を安くするか** — 固定 / 再計測 / 改良再実行 / 推定 のどれか。
-   「どれでもない」なら足さない
-2. **どの不変条件を強化するか。少なくとも、10件のどれも壊さないか** —
-   壊すものが1つでもあれば足さない
-3. **計測手段を1つに焼き込んでいないか** — 特定の判定方法・証拠形式を
-   機構側へ焼き込んでいないか（不変条件 2）。handoff と subject identity は
-   計測手段ではなく比較条件の照合として扱っているか
-
-**3問すべてに答えられ、非目標のどれにも該当しないときだけ実装する。**
-答えられない、または落ちた場合は**実装せず** `ISSUES.md` に1行残す
-（`rule-experiment-apparatus/docs/ISSUES.md`。形式は `work/AGENTS.md` の `## ISSUES.md`）。
-
-補助の評価軸が1つある。**その機能は、既存の不変条件を LLM の遵守から機械照合へ
-移すか。** 移すなら加点として扱ってよい。ただし加点であって、3問の代わりにならず、
-必須条件にもしない（この軸を必須にすると、判定を増やすこと自体が機構の肥大化になる）。
-
-判定例:
-
-| 案 | 判定 | 根拠 |
-|---|---|---|
-| `obeyed` の判定を stamp 方式で wrapper へ焼き込む | **不可** | 問3で落ちる。不変条件 (2) — 次の実験は禁止型・様式型で、stamp では測れない |
-| release を GitHub Actions から promote できるようにする | **不可** | 非目標「CI ではない」。問1にも答えられない（3操作のどれも安くならない） |
-| 注入を wrapper のステージにし、baseline への注入を拒否する | 可 | 問1=再計測/改良再実行を安くする。問2=(5)(6) を強化。問3=計測手段に触れない。**ただし形が確定してから**（2サイクル以上回した後） |
+改善・削減・機能追加の判定は [`docs/IMPROVEMENT-POLICY.md`](docs/IMPROVEMENT-POLICY.md)
+を唯一の正本とする。具体的な未着手欠陥は repository root の `ISSUES.md` に置く。
 
 ---
 
@@ -329,6 +298,7 @@ identity に何を含めるか、handoff が具体的に何を照合するかは
 CONSTITUTION.md                この装置の identity。目的・境界・不変条件・適合判定
     ↓
 TERMS.md                       正規用語の正本
+docs/IMPROVEMENT-POLICY.md     core 境界と改善判定の正本
 docs/RULE-EXPERIMENT.md        不変条件を成立させるプロトコルの正本
 docs/EXECUTION-UNIT.md         実行の所属基準の正本（executionUnitHash で pin）
 docs/ARM-SCOPE.md              アームの可視範囲と workload 適格性の正本
@@ -336,7 +306,7 @@ docs/ARM-SCOPE.md              アームの可視範囲と workload 適格性の
 docs/USER-GUIDE.md             利用者・エージェントが実際に行う操作手順
 docs/REVIEW-CRITERIA.md        記録（計測ログ）の記入基準
 docs/CYCLE-RECORD-CRITERIA.md  サイクル記録の判定基準
-implementation                 `wrapper/` / `apparatus/`
+implementation                 `apparatus/`
 ```
 
 この憲法を controller へ効かせる手段は、このリポジトリの親ワークスペースにある各ツールの

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/apparatus/execution.schema.json",
+  "title": "Cycle execution manifest",
+  "type": "object", "additionalProperties": false,
+  "required": ["schemaVersion", "cycle", "recordedAt", "arms"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "cycle": { "$ref": "#/$defs/identifier" },
+    "recordedAt": { "$ref": "#/$defs/timestamp" },
+    "arms": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "subjects", "commits"],
+        "properties": {
+          "id": { "$ref": "#/$defs/identifier" },
+          "subjects": {
+            "type": "array", "minItems": 1,
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["id", "version", "configIdentity", "launch", "sessions"],
+              "properties": {
+                "id": { "$ref": "#/$defs/identifier" },
+                "version": { "type": "string", "minLength": 1 },
+                "configIdentity": { "$ref": "#/$defs/sha256" },
+                "launch": { "type": "string", "minLength": 1 },
+                "sessions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/session" } }
+              }
+            }
+          },
+          "commits": {
+            "type": "array",
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["sha", "authoredAt"],
+              "properties": {
+                "sha": { "$ref": "#/$defs/gitObject" },
+                "authoredAt": { "$ref": "#/$defs/timestamp" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitObject": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "session": {
+      "type": "object", "additionalProperties": false,
+      "required": ["tool", "path", "span", "assistantCount", "belonging"],
+      "properties": {
+        "tool": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "span": {
+          "type": "object", "additionalProperties": false, "required": ["start", "end"],
+          "properties": { "start": { "$ref": "#/$defs/timestamp" }, "end": { "$ref": "#/$defs/timestamp" } }
+        },
+        "assistantCount": { "type": "integer", "minimum": 1 },
+        "belonging": { "const": "belongs" }
+      }
+    }
+  }
+}

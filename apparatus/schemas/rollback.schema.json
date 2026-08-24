@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/apparatus/rollback.schema.json",
+  "title": "Rollback record",
+  "type": "object", "additionalProperties": false,
+  "required": [
+    "schemaVersion", "cycle", "recordedAt", "status", "reviewSha256",
+    "variantTree", "promotionCommit", "oldStableCommit", "newStableCommit",
+    "promotedManagedDigest", "restoredManagedDigest"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "cycle": { "$ref": "#/$defs/identifier" },
+    "recordedAt": { "$ref": "#/$defs/timestamp" },
+    "status": { "enum": ["prepared", "rolled-back"] },
+    "reviewSha256": { "$ref": "#/$defs/sha256" },
+    "variantTree": { "$ref": "#/$defs/gitObject" },
+    "promotionCommit": { "$ref": "#/$defs/gitObject" },
+    "oldStableCommit": { "$ref": "#/$defs/gitObject" },
+    "newStableCommit": { "$ref": "#/$defs/gitObject" },
+    "promotedManagedDigest": { "$ref": "#/$defs/sha256" },
+    "restoredManagedDigest": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitObject": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

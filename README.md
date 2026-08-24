@@ -1,67 +1,42 @@
 # Rule Experiment Apparatus
 
-Public alpha source for a two-arm agent-rule experiment apparatus and its
-transactional workspace wrappers. Runtime state, credentials, experiment
-results, archives, and private environment descriptors are intentionally kept
-outside this repository.
-
-OpenCode is an optional reproducible development tool. It is not a subject,
-plugin, or runtime dependency of the apparatus.
-
-## Quick start
-
-Create a private environment descriptor from
-[`apparatus/schemas/environment.example.json`](apparatus/schemas/environment.example.json),
-then keep it outside the checkout. Its parent is the private control root;
-`agentRulesRoot` may be absolute or relative to that descriptor.
+`apparatus/cycle.py` is the single public apparatus for materializing, handing off, judging,
+promoting, rolling back, freezing, and estimating agent-rule experiments. Runtime records,
+authenticated config templates, private paths, and credentials stay outside this repository.
 
 ```console
 python3 -m pip install -r apparatus/requirements.txt
-python3 apparatus/cycle.py --environment <private-control>/apparatus-environment.json --selfcheck
+python3 apparatus/cycle.py --selfcheck
+python3 apparatus/tests/test_cycle.py
 ```
 
-PowerShell wrapper checks:
-
-```powershell
-.\wrapper\Invoke-FoundationTests.ps1 -Suite portable
-```
-
-OpenCode static policy check:
-
-```powershell
-.\tools\opencode-policy\Test-OpenCodePolicy.ps1
-```
-
-Use `-Live` only after `npm ci --prefix .\tools\opencode-policy`; it checks the
-configured provider and the exact model without displaying credentials or
-falling back to another model.
+Normal commands require `--environment <private-environment.json>`.
 
 ## Documentation
 
 | Document | Purpose |
 |---|---|
-| [`CONSTITUTION.md`](CONSTITUTION.md) | Normative invariants |
-| [`TERMS.md`](TERMS.md) | Shared vocabulary |
-| [`apparatus/README.md`](apparatus/README.md) | Cycle apparatus commands and data model |
-| [`docs/RULE-EXPERIMENT.md`](docs/RULE-EXPERIMENT.md) | Current experiment specification |
-| [`docs/ARM-SCOPE.md`](docs/ARM-SCOPE.md) | Workload scope gate |
-| [`docs/CYCLE-RECORD-CRITERIA.md`](docs/CYCLE-RECORD-CRITERIA.md) | Record acceptance criteria |
-| [`docs/EXECUTION-UNIT.md`](docs/EXECUTION-UNIT.md) | Execution-unit identity |
-| [`docs/REVIEW-CRITERIA.md`](docs/REVIEW-CRITERIA.md) | Review criteria |
+| [`CONSTITUTION.md`](CONSTITUTION.md) | Purpose and invariants |
+| [`TERMS.md`](TERMS.md) | Canonical vocabulary |
+| [`docs/IMPROVEMENT-POLICY.md`](docs/IMPROVEMENT-POLICY.md) | Core boundary and improvement rule |
+| [`docs/RULE-EXPERIMENT.md`](docs/RULE-EXPERIMENT.md) | Experiment protocol |
+| [`docs/EXECUTION-UNIT.md`](docs/EXECUTION-UNIT.md) | Session ownership and provenance |
+| [`docs/ARM-SCOPE.md`](docs/ARM-SCOPE.md) | Workload scope |
+| [`docs/REVIEW-CRITERIA.md`](docs/REVIEW-CRITERIA.md) | Review and promotion decision |
+| [`docs/CYCLE-RECORD-CRITERIA.md`](docs/CYCLE-RECORD-CRITERIA.md) | Cycle record contract |
 | [`docs/COMMANDS.md`](docs/COMMANDS.md) | Command reference |
-| [`docs/SETUP-GUIDE.md`](docs/SETUP-GUIDE.md) | Setup guide |
-| [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) | Operator guide |
-| [`docs/templates/measurement-brief.md`](docs/templates/measurement-brief.md) | Neutral measurement template |
-| [`wrapper/README.md`](wrapper/README.md) | Transactional wrapper reference |
-| [`wrapper/config/README.md`](wrapper/config/README.md) | Private configuration boundary |
-| [`tools/codex-policy/README.md`](tools/codex-policy/README.md) | Credential-free Codex policy tooling |
-| [`tools/opencode-policy/README.md`](tools/opencode-policy/README.md) | Credential-free OpenCode tool policy |
+| [`docs/SETUP-GUIDE.md`](docs/SETUP-GUIDE.md) | Private setup |
+| [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) | Operator workflow |
+| [`docs/templates/measurement-brief.md`](docs/templates/measurement-brief.md) | Measurement brief template |
+| [`apparatus/README.md`](apparatus/README.md) | Schemas and implementation boundary |
+| [`HANDOFF.md`](HANDOFF.md) | Current machine-local project state |
+| [`ISSUES.md`](ISSUES.md) | Deferred concrete defects |
 
 ### Historical
 
-Historical experiment records and incident reports are not published in this
-repository.
+Historical records remain in private control repositories and Git history; no legacy runtime is
+shipped here.
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+MIT. See `LICENSE`.

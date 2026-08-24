@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/apparatus/calibration-record.schema.json",
   "title": "Calibration record (schemaVersion 1)",
-  "description": "推定器ごとの較正記録の正本（private-control/calibrations/<estimatorId>.json）。正解データは計測済みサイクル（対照アームがあり、記録が有効なもの）から derive_ground_truth() で導出し、片アームだけを凍結して計測結果を伏せた推定と突き合わせる。較正は実験サイクル中に行わない（憲法 §1 の前提条件を確立する操作）。verdict 等の禁止キーは additionalProperties: false と cycle.py の _reject_forbidden_keys の両方で防ぐ（多層防御）。calibrationHash・estimator.identity・frozenInput.manifest との整合など、フィールド間の条件は cycle.py の validate_calibration_record() が持つ。",
+  "description": "推定器ごとの較正記録の正本（foundation-control/calibrations/<estimatorId>.json）。正解データは計測済みサイクル（対照アームがあり、記録が有効なもの）から derive_ground_truth() で導出し、片アームだけを凍結して計測結果を伏せた推定と突き合わせる。較正は実験サイクル中に行わない（憲法 §1 の前提条件を確立する操作）。verdict 等の禁止キーは additionalProperties: false と cycle.py の _reject_forbidden_keys の両方で防ぐ（多層防御）。calibrationHash・estimator.identity・frozenInput.manifest との整合など、フィールド間の条件は cycle.py の validate_calibration_record() が持つ。",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "kind", "estimator", "calibrations"],

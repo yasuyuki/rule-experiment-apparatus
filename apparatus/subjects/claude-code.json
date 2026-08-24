@@ -1,28 +1,18 @@
 {
   "id": "claude-code",
+  "tool": "claude",
   "isolationEnv": "CLAUDE_CONFIG_DIR",
-  "isolationComplete": true,
   "versionCommand": "claude --version",
   "binary": "claude",
-  "configRoot": {
-    "alwaysApplyFile": "CLAUDE.md",
-    "emptyRulesDir": "rules",
-    "credentialDest": ".credentials.json",
-    "credentialSource": "~/.claude/.credentials.json"
-  },
+  "markerFile": "CLAUDE.md",
+  "identityPaths": [".credentials.json", "settings.json"],
   "workspacePlacement": [
-    { "path": ".claude/rules/*.md", "proven": true },
-    { "path": "CLAUDE.md", "proven": true }
+    { "path": ".claude/rules/*.md", "proven": true }
   ],
-  "configRootPlacement": [
-    { "path": "CLAUDE.md", "proven": true },
-    { "path": "rules/*.md", "proven": true }
-  ],
-  "keepEmpty": ["rules", ".claude/rules"],
+  "keepEmpty": ["CLAUDE.md", ".cursorrules"],
   "transcripts": {
     "glob": "projects/*/*.jsonl",
     "armBinding": "project-slug",
     "participation": { "jsonlField": "type", "equals": "assistant" }
-  },
-  "login": "credential-file"
+  }
 }

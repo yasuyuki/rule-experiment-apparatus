@@ -1,30 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/apparatus/frozen-input.schema.json",
-  "title": "Frozen input manifest (schemaVersion 1)",
-  "description": "推定器が読んでよい凍結入力の束の正本（docs/RULE-EXPERIMENT.md §7.2）。時刻・mtime・ホスト名は含まない（frozenAt は frozen.meta.json 側。hash 対象外）。束全体の hash は cycle.py の content_hash(manifest) で計算し、ファイルバイト列や整形済みテキストからは計算しない。凍結後の追記・差し替えは別の凍結入力になる（新しい hash）。",
-  "type": "object",
-  "additionalProperties": false,
+  "title": "Frozen input manifest",
+  "type": "object", "additionalProperties": false,
   "required": [
-    "schemaVersion",
-    "kind",
-    "cycle",
-    "experiment",
-    "arm",
-    "armRole",
-    "variant",
-    "variantTree",
-    "subject",
-    "subjectVersion",
-    "declarationSha256",
-    "workloadSha256",
-    "measurementSha256",
-    "commitRange",
-    "sessions",
-    "members"
+    "schemaVersion", "kind", "cycle", "experiment", "arm", "armRole", "variant",
+    "variantTree", "subjects", "declarationSha256", "workloadSha256",
+    "measurementSha256", "commitRange", "sessions", "members"
   ],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "kind": { "const": "frozen-input" },
     "cycle": { "$ref": "#/$defs/identifier" },
     "experiment": { "$ref": "#/$defs/identifier" },
@@ -32,24 +17,23 @@
     "armRole": { "enum": ["control", "treatment"] },
     "variant": { "$ref": "#/$defs/identifier" },
     "variantTree": { "$ref": "#/$defs/gitObject" },
-    "subject": {
-      "oneOf": [
-        { "type": "string", "minLength": 1 },
-        {
-          "type": "array",
-          "minItems": 1,
-          "items": { "type": "string", "minLength": 1 }
+    "subjects": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "version", "configIdentity"],
+        "properties": {
+          "id": { "$ref": "#/$defs/identifier" },
+          "version": { "type": "string", "minLength": 1 },
+          "configIdentity": { "$ref": "#/$defs/sha256" }
         }
-      ]
+      }
     },
-    "subjectVersion": { "type": "string", "minLength": 1 },
     "declarationSha256": { "$ref": "#/$defs/sha256" },
     "workloadSha256": { "$ref": "#/$defs/sha256" },
     "measurementSha256": { "$ref": "#/$defs/sha256" },
     "commitRange": {
-      "description": "対象の commit 範囲を明示する。base はアーム共通の base commit、injection は変種注入 commit、head は凍結時点のアーム HEAD。",
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false,
       "required": ["base", "injection", "head", "commits"],
       "properties": {
         "base": { "$ref": "#/$defs/gitObject" },
@@ -58,8 +42,7 @@
         "commits": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": false,
+            "type": "object", "additionalProperties": false,
             "required": ["commit", "authorTime"],
             "properties": {
               "commit": { "$ref": "#/$defs/gitObject" },
@@ -69,33 +52,17 @@
         }
       }
     },
-    "sessions": {
-      "description": "発見した全セッション（参加していないものも含む）。cycle-record.schema.json の arms[].sessions と同じ形。",
-      "type": "array",
-      "items": { "$ref": "#/$defs/session" }
-    },
+    "sessions": { "type": "array", "items": { "$ref": "#/$defs/session" } },
     "members": {
-      "description": "束ねたメンバー。id は declaration / workload / measurement / variant-injection / arm-run / transcript-NN の固定順で昇順に並べる。",
-      "type": "array",
-      "minItems": 1,
+      "type": "array", "minItems": 1,
       "items": {
-        "type": "object",
-        "additionalProperties": false,
+        "type": "object", "additionalProperties": false,
         "required": ["id", "kind", "path", "source", "sha256", "bytes"],
         "properties": {
           "id": { "$ref": "#/$defs/identifier" },
           "kind": { "enum": ["declaration", "workload", "measurement", "artifact-diff", "transcript"] },
-          "path": {
-            "description": "束の中の相対パス（payload/ 配下）。",
-            "type": "string",
-            "minLength": 1,
-            "pattern": "^payload/"
-          },
-          "source": {
-            "description": "出所を表す文字列。Windows 絶対パス・\\\\wsl$・実ユーザー名を含めない（cycle.py の _reject_identity_leak が検査する）。",
-            "type": "string",
-            "minLength": 1
-          },
+          "path": { "type": "string", "pattern": "^payload/" },
+          "source": { "type": "string", "minLength": 1 },
           "sha256": { "$ref": "#/$defs/sha256" },
           "bytes": { "type": "integer", "minimum": 0 }
         }
@@ -103,54 +70,25 @@
     }
   },
   "$defs": {
-    "identifier": {
-      "type": "string",
-      "minLength": 1,
-      "pattern": "^[A-Za-z0-9._-]+$"
-    },
-    "sha256": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{64}$"
-    },
-    "gitObject": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{40}$"
-    },
-    "timestamp": {
-      "type": "string",
-      "format": "date-time",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
-    },
+    "identifier": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitObject": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "timestamp": { "type": "string", "format": "date-time" },
     "session": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false,
       "required": ["tool", "path", "span", "assistantCount", "belonging"],
       "properties": {
         "tool": { "type": "string", "minLength": 1 },
         "path": { "type": "string", "minLength": 1 },
         "span": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["start", "end"],
+          "type": "object", "additionalProperties": false, "required": ["start", "end"],
           "properties": {
-            "start": {
-              "oneOf": [
-                { "type": "null" },
-                { "$ref": "#/$defs/timestamp" }
-              ]
-            },
-            "end": {
-              "oneOf": [
-                { "type": "null" },
-                { "$ref": "#/$defs/timestamp" }
-              ]
-            }
+            "start": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/timestamp" }] },
+            "end": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/timestamp" }] }
           }
         },
         "assistantCount": { "type": "integer", "minimum": 0 },
-        "belonging": {
-          "enum": ["belongs", "does-not-belong", "unclassifiable"]
-        },
+        "belonging": { "enum": ["belongs", "does-not-belong", "unclassifiable"] },
         "belongingReason": { "type": "string" }
       }
     }

@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""比較キーだけを持つサイクル宣言から、candidate 上に同一 base の2アームを
-実体化し、subject 用の config root を構成する。サブコマンドは `materialize` と
-`handoff`、判定器を両アームへ同一に適用して記録する `judge`、transcript の
-読み取り専用照合 `transcripts`。`freeze` は推定器が読んでよい凍結入力の束を作り
-hash で識別する。`estimate` は較正済みの推定器の出力を triage 専用の推定記録
-として残す。`calibrate` は計測済みサイクルの片アームから較正記録を作る
-（`--prepare` は凍結と正解データ導出可否だけを確認し、計測結果は出力しない）。
-`--selfcheck` は実資産に触れずに照合関数を検査する。
+"""Materialize, hand off, judge, promote, and roll back rule experiments.
 
     python cycle.py materialize --cycle <name>
     python cycle.py handoff --cycle <name>
@@ -15,13 +8,13 @@ hash で識別する。`estimate` は較正済みの推定器の出力を triage
     python cycle.py freeze --cycle <name> --arm <arm-id>
     python cycle.py estimate --frozen <hash> --estimator <id> --input <path> [--replace] [--allow-measured]
     python cycle.py calibrate --cycle <name> --arm <arm-id> --estimator <id> (--prepare | --input <path>) [--replace]
+    python cycle.py promote --cycle <name>
+    python cycle.py rollback --cycle <name>
     python cycle.py --selfcheck
 
-環境 primitive は exec_() ひとつだけ。アームのファイル操作（コピー・sha256・
-git）はすべて distro 内から行う。Windows 側で読むのは manifest.json と
-宣言 JSON、正本照合用の git コマンド、および比較キー用ファイルの sha256 だけで、
-UNC 経由（\\wsl$ 配下）へは書き込まない。`freeze` は凍結入力の束（transcript を
-含む）を作るため例外的に exec_() 経由でアーム内ファイルの内容（base64）を読む。
+Normal commands require an explicit environment descriptor. Executor operations use bash through
+either WSL or local POSIX. Promotion changes only the declared stable rule-source repository;
+runtime distribution, push, tag, and release are outside this program.
 """
 
 import argparse
@@ -33,6 +26,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -53,23 +47,23 @@ def to_mnt(win_path):
     return "/mnt/%s%s" % (drive[0].lower(), rest.replace("\\", "/"))
 
 
+def to_executor_path(host_path):
+    if load_environment()["executor"]["kind"] == "wsl":
+        return to_mnt(host_path)
+    return host_path.replace("\\", "/")
+
+
 def parse_timestamp(value):
     """Python 3.10 でも RFC 3339 の UTC 接尾辞を読めるようにする。"""
     return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-# 既存の sibling 構成は移行中の既定値としてだけ残す。処理本体は環境記述子の
-# `agentRulesRoot` を読むため、公開 apparatus は sibling 名に依存しない。
-WORK_WIN = os.path.dirname(os.path.dirname(APPARATUS_DIR))
-DEFAULT_ENVIRONMENT_PATH = os.path.join(
-    WORK_WIN, "private-control", "apparatus-environment.json"
-)
-ENVIRONMENT_PATH = DEFAULT_ENVIRONMENT_PATH
+ENVIRONMENT_PATH = None
 
 # manifest の無い変種は正本のうち subject が使うものだけをアームへ運ぶ。
 # README.md は構造と使い方だけを書き、測定に言及しない。
 # reconciliation.md と controller.md は比較や測定に言及するので除外する（憲法 不変条件 3）。
-VARIANT_COPY_ITEMS = ("bin", "rules", "placement.json", "README.md")
+MANAGED_ITEMS = ("rules", "placement.json", "bin/rules.py")
 
 # 不変条件 8(3) と docs/EXECUTION-UNIT.md の閉じた可読性候補。
 META_READABILITY_FIXED = (
@@ -86,11 +80,11 @@ META_READABILITY_GLOBS = (
 
 # 推定機構（docs/RULE-EXPERIMENT.md §7）の置き場。環境記述子の
 # 親を private control root とし、実データ・実推定器資産はここへは版管理しない。
-CONTROL_DIR = os.path.dirname(ENVIRONMENT_PATH)
-FROZEN_DIR = os.path.join(CONTROL_DIR, "frozen")
-ESTIMATIONS_DIR = os.path.join(CONTROL_DIR, "estimations")
-CALIBRATIONS_DIR = os.path.join(CONTROL_DIR, "calibrations")
-ESTIMATORS_DIR = os.path.join(CONTROL_DIR, "estimators")
+CONTROL_DIR = None
+FROZEN_DIR = None
+ESTIMATIONS_DIR = None
+CALIBRATIONS_DIR = None
+ESTIMATORS_DIR = None
 
 # 凍結入力の member.source にこれらの部分文字列が含まれていたら拒否する。
 # 計測記録・判定器・baseline manifest を凍結入力へ混ぜない（不変条件10と同型の
@@ -108,18 +102,15 @@ _environment_cache = None
 _subject_cache = {}
 
 
-def configure_environment(path=None):
-    """Select an environment descriptor and derive its private control root.
-
-    With no option, retain the legacy sibling layout for migration.  A supplied
-    descriptor may live anywhere; its parent is the control root for all
-    runtime records produced by this process.
-    """
+def configure_environment(path):
+    """Select the required environment descriptor and its private record root."""
     global ENVIRONMENT_PATH, CONTROL_DIR
     global FROZEN_DIR, ESTIMATIONS_DIR, CALIBRATIONS_DIR, ESTIMATORS_DIR
     global _environment_cache
 
-    ENVIRONMENT_PATH = os.path.abspath(path or DEFAULT_ENVIRONMENT_PATH)
+    if not path:
+        raise SystemExit("--environment is required")
+    ENVIRONMENT_PATH = os.path.abspath(path)
     CONTROL_DIR = os.path.dirname(ENVIRONMENT_PATH)
     FROZEN_DIR = os.path.join(CONTROL_DIR, "frozen")
     ESTIMATIONS_DIR = os.path.join(CONTROL_DIR, "estimations")
@@ -128,16 +119,19 @@ def configure_environment(path=None):
     _environment_cache = None
 
 
-def agent_rules_root():
-    """Return the agent-rules root named by the active environment descriptor."""
-    value = load_environment().get("agentRulesRoot")
-    if value is None:
-        # Compatibility for pre-cutover descriptors.  New descriptors should
-        # always set agentRulesRoot, so public layouts do not require siblings.
-        return os.path.join(os.path.dirname(CONTROL_DIR), "agent-rules")
+def resolve_control_path(value):
+    """Resolve a host-side path relative to the environment descriptor."""
     if os.path.isabs(value):
         return os.path.normpath(value)
     return os.path.normpath(os.path.join(CONTROL_DIR, value))
+
+
+def variant_source_root():
+    return resolve_control_path(load_environment()["variantSourceRoot"])
+
+
+def stable_rules_root():
+    return resolve_control_path(load_environment()["stableRules"]["root"])
 
 
 def _jsonschema_mod():
@@ -169,11 +163,11 @@ def validate_against_schema(instance, schema_filename, label):
 
 
 def load_environment():
-    """private-control 配下の環境記述子。プロセス内キャッシュ。"""
+    """foundation-control 配下の環境記述子。プロセス内キャッシュ。"""
     global _environment_cache
     if _environment_cache is not None:
         return _environment_cache
-    if not os.path.isfile(ENVIRONMENT_PATH):
+    if not ENVIRONMENT_PATH or not os.path.isfile(ENVIRONMENT_PATH):
         raise SystemExit("environment descriptor not found: %s" % ENVIRONMENT_PATH)
     with open(ENVIRONMENT_PATH, encoding="utf-8") as handle:
         env = json.load(handle)
@@ -203,31 +197,19 @@ def load_subject(subject_id):
 
 
 def subject_ids(decl):
-    """宣言の subject を id リストへ正規化する。文字列または非空の文字列リスト。"""
-    value = decl.get("subject")
-    if isinstance(value, str):
-        return [value]
+    """Return the declaration's immutable subject id list."""
+    value = decl.get("subjects")
     if (
         isinstance(value, list)
         and value
         and all(isinstance(item, str) and item for item in value)
+        and len(value) == len(set(value))
     ):
         return value
     raise SystemExit(
-        "declaration subject must be a non-empty string or a non-empty list of strings: %r"
+        "declaration subjects must be a non-empty unique list of strings: %r"
         % (value,)
     )
-
-
-def iter_transcript_subjects():
-    """apparatus/subjects/ のうち transcripts が非 null の記述子を id 順で返す。"""
-    for name in sorted(os.listdir(SUBJECTS_DIR)):
-        if not name.endswith(".json"):
-            continue
-        subject = load_subject(name[:-5])
-        if subject.get("transcripts") is None:
-            continue
-        yield subject
 
 
 def execution_unit_path():
@@ -235,10 +217,7 @@ def execution_unit_path():
 
 
 def exec_(cmd, check=True):
-    """環境記述子の host に応じてコマンドを実行する。
-
-    host=unix: wsl.exe -d <distro> -u <user> -e bash -lc '<cmd>'
-    host=windows: powershell.exe -NoProfile -NonInteractive -Command '<cmd>'
+    """Run bash either through the declared WSL boundary or locally.
 
     check=True（既定）なら非0終了時に stderr を添えて例外を送出し、stdout を
     返す。既存の呼び出し（materialize / handoff）はこの既定のままで挙動は
@@ -251,19 +230,17 @@ def exec_(cmd, check=True):
     `$(...)` が本来の bash -lc に届く前に空へ潰れる（cd や変数に依存する
     スクリプトが無言で壊れる）。`-e` はその中継を経ずに argv を直接
     execve するため、実測でこの問題が再現しない。"""
-    env = load_environment()
-    host = env["host"]
-    if host == "unix":
+    executor = load_environment()["executor"]
+    kind = executor["kind"]
+    if kind == "wsl":
         argv = [
-            "wsl.exe", "-d", env["distro"], "-u", env["user"],
+            "wsl.exe", "-d", executor["distro"], "-u", executor["user"],
             "-e", "bash", "-lc", cmd,
         ]
-    elif host == "windows":
-        argv = [
-            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", cmd,
-        ]
+    elif kind == "local-posix":
+        argv = ["bash", "-lc", cmd]
     else:
-        raise SystemExit("unsupported environment host: %r" % host)
+        raise SystemExit("unsupported executor kind: %r" % kind)
     result = subprocess.run(
         argv,
         capture_output=True, text=True, encoding="utf-8",
@@ -279,14 +256,14 @@ def exec_(cmd, check=True):
     return result.stdout, result.stderr, result.returncode
 
 
-def git_win(*args):
-    """agent-rules を Windows 側の git で読む（正本照合専用）。"""
+def git_source(*args):
+    """Read the private variant-source repository on the controller host."""
     result = subprocess.run(
-        ["git", "-C", agent_rules_root(), *args],
+        ["git", "-C", variant_source_root(), *args],
         capture_output=True, text=True, encoding="utf-8",
     )
     if result.returncode != 0:
-        raise SystemExit("git %s failed: %s" % (" ".join(args), result.stderr))
+        raise SystemExit("variant source git %s failed: %s" % (" ".join(args), result.stderr))
     return result.stdout
 
 
@@ -315,15 +292,14 @@ def load_cycle(name):
 
 
 def cycle_kind(decl):
-    """宣言の kind。欠落は measurement。"""
-    return decl.get("kind", "measurement")
+    return decl["kind"]
 
 
 def validate_arms(cycle_name, decl):
     """宣言の arms を使う前に検証する。空・必須キー欠落・id の形式不正・
     id 重複は SystemExit。重複を許すと judge の reports 集計が id で潰れ、
     「全アームの report が揃った」ガードが黙って照合をスキップする。
-    estimation は arms ちょうど1件、それ以外は2件以上かつ control が1件以上。"""
+    estimation is exactly one arm; measurement is one control plus one treatment."""
     path = cycle_path(cycle_name)
     arms = decl.get("arms")
     if not arms:
@@ -347,31 +323,24 @@ def validate_arms(cycle_name, decl):
                 "estimation cycle requires exactly 1 arm, got %d: %s" % (len(arms), path)
             )
     else:
-        if len(arms) < 2:
+        roles = [arm["role"] for arm in arms]
+        if len(arms) != 2 or sorted(roles) != ["control", "treatment"]:
             raise SystemExit(
-                "measurement cycle requires at least 2 arms, got %d: %s"
-                % (len(arms), path)
-            )
-        if not any(arm.get("role") == "control" for arm in arms):
-            raise SystemExit(
-                "measurement cycle requires at least one arm with role 'control': %s"
-                % path
+                "measurement cycle requires exactly one control and one treatment: %s"
+                % roles
             )
 
 
-def require_subject(cycle_name, decl, require_version):
-    """`subject`（judge では `subjectVersion` も）の必須化。欠落を KeyError の
-    traceback や `null` 入りの記録にしない（憲法 不変条件 (9) は版の記録を
-    要求している）。列挙した id の記述子が読めることもここで担保する。"""
+def require_subject(cycle_name, decl, require_version=False):
+    """Validate every declared subject and its private template binding."""
     path = cycle_path(cycle_name)
-    if "subject" not in decl:
-        raise SystemExit("declaration is missing key 'subject': %s" % path)
+    if "subjects" not in decl:
+        raise SystemExit("declaration is missing key 'subjects': %s" % path)
+    configured = load_environment()["subjects"]
     for sid in subject_ids(decl):
         load_subject(sid)
-    if require_version and not decl.get("subjectVersion"):
-        raise SystemExit(
-            "declaration is missing key 'subjectVersion' (or it is null/empty): %s" % path
-        )
+        if sid not in configured:
+            raise SystemExit("subject %s has no configTemplate in environment: %s" % (sid, path))
 
 
 def release_path(cycle_name):
@@ -384,36 +353,58 @@ def verify_canonical(experiment, arm):
     """正本の照合。宣言の variantTree と実体の食い違い、作業ツリーの汚れを
     リストで返す（無ければ空リスト）。呼び出し元が exit するかどうかを決める。"""
     mismatches = []
-    rel = "experiments/%s/variants/%s" % (experiment, arm["variant"])
-    actual = git_win("rev-parse", "HEAD:%s" % rel).strip()
+    rel = "experiments/%s/variants/%s/source" % (experiment, arm["variant"])
+    actual = git_source("rev-parse", "HEAD:%s" % rel).strip()
     if actual != arm["variantTree"]:
         mismatches.append(
             "mismatch: variantTree for %s: declared %s, actual %s"
             % (arm["id"], arm["variantTree"], actual)
         )
-    dirty = git_win("status", "--porcelain", "--", rel)
+    dirty = git_source("status", "--porcelain", "--", rel)
     if dirty.strip():
         mismatches.append("mismatch: canonical is dirty for %s:\n%s" % (arm["id"], dirty))
     return mismatches
 
 
 def variant_canonical_dir(experiment, variant):
-    return os.path.join(agent_rules_root(), "experiments", experiment, "variants", variant)
+    return os.path.join(
+        variant_source_root(), "experiments", experiment, "variants", variant, "source"
+    )
 
 
-def copy_plan_from_manifest(experiment, variant):
-    """manifest.json から `<arm>/` 宛てファイルの (src, dest_rel, sha256) を作る。"""
-    manifest_path = os.path.join(variant_canonical_dir(experiment, variant), "manifest.json")
-    with open(manifest_path, encoding="utf-8") as handle:
-        manifest = json.load(handle)
-    root = "%s/experiments/%s/variants/%s" % (to_mnt(agent_rules_root()), experiment, variant)
-    plan = []
-    for entry in manifest["files"]:
-        if not entry["source"].startswith("<arm>/"):
+def load_variant_placement(experiment, variant):
+    path = os.path.join(variant_canonical_dir(experiment, variant), "placement.json")
+    with open(path, encoding="utf-8") as handle:
+        placement = json.load(handle)
+    if not isinstance(placement.get("tools"), dict) or not placement["tools"]:
+        raise SystemExit("variant placement has no tools: %s" % path)
+    return placement
+
+
+def selected_output_patterns(decl, arm):
+    """Return proven renderer output patterns for the selected subjects."""
+    placement = load_variant_placement(decl["experiment"], arm["variant"])
+    patterns = []
+    must_stay_empty = set(placement.get("mustStayEmpty", []))
+    mismatches = []
+    for sid in subject_ids(decl):
+        subject = load_subject(sid)
+        must_stay_empty.update(subject["keepEmpty"])
+        spec = placement["tools"].get(subject["tool"])
+        if spec is None or not isinstance(spec.get("path"), str):
+            mismatches.append("mismatch: variant has no placement for subject %s" % sid)
             continue
-        dest_rel = entry["source"][len("<arm>/"):]
-        plan.append(("%s/%s" % (root, entry["recorded"]), dest_rel, entry["sha256"]))
-    return plan
+        output = spec["path"].replace("{id}", "*")
+        proven = [p["path"] for p in subject["workspacePlacement"] if p["proven"]]
+        if not any(fnmatch.fnmatch(output, path) or fnmatch.fnmatch(path, output) for path in proven):
+            mismatches.append(
+                "mismatch: output %s for subject %s is not on a proven placement"
+                % (output, sid)
+            )
+        patterns.append(output)
+    if mismatches:
+        raise SystemExit("\n".join(mismatches))
+    return sorted(set(patterns)), sorted(must_stay_empty)
 
 
 def _bash_copy_file_with_conflict(src_expr, dest_expr):
@@ -451,84 +442,61 @@ def _bash_copy_tree_with_conflict(src_root, dest_root):
     ])
 
 
-def build_arm_inject_lines(arm, experiment):
-    """1アーム分の注入コマンド行。manifest 有無で方式を選ぶ。"""
-    variant = arm["variant"]
-    arm_id = arm["id"]
-    vdir_win = variant_canonical_dir(experiment, variant)
-    root_mnt = "%s/experiments/%s/variants/%s" % (to_mnt(agent_rules_root()), experiment, variant)
-    lines = []
-    if os.path.isfile(os.path.join(vdir_win, "manifest.json")):
-        plan = copy_plan_from_manifest(experiment, variant)
-        for src, dest_rel, _sha in plan:
-            dest = "%s/%s" % (arm_id, dest_rel)
-            lines.append(
-                _bash_copy_file_with_conflict(shlex.quote(src), shlex.quote(dest))
-            )
-        if plan:
-            quoted = " ".join(shlex.quote(dest) for _, dest, _ in plan)
-            lines.append("cd %s" % shlex.quote(arm_id))
-            lines.append(
-                "sha256sum %s | while read hash path; do "
-                "echo PLANSHA256 %s $path $hash; done"
-                % (quoted, shlex.quote(arm_id))
-            )
-            lines.append("cd ..")
-        return lines, plan
-    for item in VARIANT_COPY_ITEMS:
-        src = "%s/%s" % (root_mnt, item)
-        dest = "%s/%s" % (arm_id, item)
-        lines.extend(_bash_copy_tree_with_conflict(src, dest).splitlines())
-    if os.path.isfile(os.path.join(vdir_win, "bin", "rules.py")):
-        lines.append("cd %s" % shlex.quote(arm_id))
-        # render は新規ファイルを書いてよい。既存ファイルの内容変更は衝突。
+def build_arm_inject_lines(arm, decl):
+    """Render outside the arm, then copy only selected proven outputs."""
+    source = to_executor_path(variant_canonical_dir(decl["experiment"], arm["variant"]))
+    patterns, must_stay_empty = selected_output_patterns(decl, arm)
+    case_patterns = "|".join(patterns)
+    arm_q = shlex.quote(arm["id"])
+    lines = [
+        "tmp=$(mktemp -d)",
+        "PYTHONDONTWRITEBYTECODE=1 python3 %s render \"$tmp\"" % shlex.quote(source + "/bin/rules.py"),
+        "while IFS= read -r -d '' f; do",
+        "  rel=${f#$tmp/}",
+        "  case \"$rel\" in",
+        "    %s) dest=%s/$rel; %s ;;" % (
+            case_patterns,
+            arm_q,
+            _bash_copy_file_with_conflict('"$f"', '"$dest"'),
+        ),
+        "  esac",
+        "done < <(find \"$tmp\" -type f -print0)",
+        "rm -rf \"$tmp\"",
+    ]
+    for path in must_stay_empty:
+        target = "%s/%s" % (arm_q, shlex.quote(path))
         lines.append(
-            "PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'\n"
-            "import hashlib, os, subprocess, sys\n"
-            "def digest(path):\n"
-            "    hasher = hashlib.sha256()\n"
-            "    with open(path, 'rb') as handle:\n"
-            "        for chunk in iter(lambda: handle.read(65536), b''):\n"
-            "            hasher.update(chunk)\n"
-            "    return hasher.hexdigest()\n"
-            "before = {}\n"
-            "for root, _dirs, files in os.walk('.'):\n"
-            "    for name in files:\n"
-            "        rel = os.path.join(root, name)\n"
-            "        before[rel] = digest(rel)\n"
-            "result = subprocess.run([sys.executable, 'bin/rules.py', 'render', '.'])\n"
-            "if result.returncode != 0:\n"
-            "    raise SystemExit(result.returncode)\n"
-            "for rel, old in before.items():\n"
-            "    if digest(rel) != old:\n"
-            "        sys.stderr.write('mismatch: render overwrote existing %s\\n' % rel)\n"
-            "        raise SystemExit(1)\n"
-            "PY"
+            "if { [ -e %(target)s ] || [ -L %(target)s ]; } && "
+            "{ [ ! -d %(target)s ] || "
+            "[ -n \"$(find %(target)s -mindepth 1 -print -quit)\" ]; }; "
+            "then echo %(message)s >&2; exit 1; fi"
+            % {
+                "target": target,
+                "message": shlex.quote(
+                    "mismatch: unused always-apply path is not empty: %s" % path
+                ),
+            }
         )
-        lines.append("cd ..")
-    return lines, []
+    return lines
 
 
 def resolve_materialize_base(decl):
-    """宣言の base を解決する。無ければ拒否。repo は装置親 basename と一致必須。"""
+    """Resolve the declared workload repository without a sibling convention."""
     base = decl.get("base")
     if not isinstance(base, dict) or "repo" not in base or "commit" not in base:
         raise SystemExit("materialize requires base: {repo, commit}")
     repo_id = base["repo"]
-    parent = os.path.dirname(APPARATUS_DIR)
-    expected = os.path.basename(parent)
-    if repo_id != expected:
-        raise SystemExit(
-            "base.repo %r does not match apparatus parent basename %r"
-            % (repo_id, expected)
-        )
+    parent = repo_id if os.path.isabs(repo_id) else os.path.join(CONTROL_DIR, repo_id)
+    parent = os.path.normpath(parent)
+    if not os.path.isdir(os.path.join(parent, ".git")):
+        raise SystemExit("base.repo is not a Git repository: %s" % parent)
     commit = base["commit"]
     if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise SystemExit("base.commit must be a 40-char lowercase hex git object")
     return parent, commit
 
 
-def build_setup_script(cycle, src_mnt, commit, arms, experiment):
+def build_setup_script(cycle, src_mnt, commit, arms, experiment, subjects):
     """実リポジトリを base に clone → detach checkout → 各アーム clone → 注入。"""
     release = release_path(cycle)
     lines = [
@@ -549,10 +517,8 @@ def build_setup_script(cycle, src_mnt, commit, arms, experiment):
         lines.append("git clone -q base %s" % shlex.quote(arm["id"]))
     manifest_plans = []
     for arm in arms:
-        inject_lines, plan = build_arm_inject_lines(arm, experiment)
+        inject_lines = build_arm_inject_lines(arm, {"experiment": experiment, "subjects": subjects})
         lines.extend(inject_lines)
-        if plan:
-            manifest_plans.append((arm["id"], plan))
     for arm in arms:
         arm_q = shlex.quote(arm["id"])
         # 実リポジトリ base は deny-by-default の .gitignore を持つ。注入した
@@ -603,7 +569,7 @@ def materialize(cycle_name):
     validate_arms(cycle_name, decl)
     experiment = decl["experiment"]
     src_win, commit = resolve_materialize_base(decl)
-    src_mnt = to_mnt(src_win)
+    src_mnt = to_executor_path(src_win)
 
     for arm in decl["arms"]:
         mismatches = verify_canonical(experiment, arm)
@@ -611,7 +577,7 @@ def materialize(cycle_name):
             raise SystemExit("\n".join(mismatches))
 
     script, manifest_plans = build_setup_script(
-        cycle_name, src_mnt, commit, decl["arms"], experiment
+        cycle_name, src_mnt, commit, decl["arms"], experiment, subject_ids(decl)
     )
     setup_out = exec_(script)
 
@@ -743,7 +709,7 @@ def collect_provenance_mismatches(cycle_name, decl):
 # 正本は agent-rules/experiments/<experiment>/session-contract.md。
 def session_contract_path(experiment):
     return os.path.join(
-        agent_rules_root(), "experiments", experiment, "session-contract.md"
+        variant_source_root(), "experiments", experiment, "session-contract.md"
     )
 
 
@@ -755,6 +721,21 @@ def load_session_contract(experiment):
 def sha256_file(path):
     with open(path, "rb") as handle:
         return hashlib.sha256(handle.read()).hexdigest()
+
+
+def atomic_write_json(path, payload):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".%s." % os.path.basename(path), dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def is_meta_readability_candidate(path):
@@ -849,13 +830,6 @@ def collect_arm_meta_readability_present(cycle_name, arm_id):
     return present
 
 
-def write_cycle(name, decl):
-    path = os.path.join(CYCLES_DIR, "%s.json" % name)
-    with open(path, "w", encoding="utf-8", newline="\n") as handle:
-        json.dump(decl, handle, indent=2, ensure_ascii=False)
-        handle.write("\n")
-
-
 def collect_handoff_mismatches(cycle_name, decl):
     """handoff 前の照合。宣言と実物の食い違い、アームが materialize 直後で
     ないこと、config root に transcript が既にあることをすべて集めて返す
@@ -867,9 +841,9 @@ def collect_handoff_mismatches(cycle_name, decl):
         mismatches.extend(verify_canonical(experiment, arm))
 
     hash_checks = [
-        ("workloadHash", os.path.join(agent_rules_root(), "experiments", experiment, "workload.md")),
-        ("measurementHash", os.path.join(agent_rules_root(), "experiments", experiment, "MEASUREMENT.md")),
-        ("judgeHash", os.path.join(agent_rules_root(), "experiments", experiment, "judge", "judge.py")),
+        ("workloadHash", os.path.join(variant_source_root(), "experiments", experiment, "workload.md")),
+        ("measurementHash", os.path.join(variant_source_root(), "experiments", experiment, "MEASUREMENT.md")),
+        ("judgeHash", os.path.join(variant_source_root(), "experiments", experiment, "judge", "judge.py")),
         ("sessionContractHash", session_contract_path(experiment)),
         ("executionUnitHash", execution_unit_path()),
     ]
@@ -939,34 +913,52 @@ def collect_handoff_mismatches(cycle_name, decl):
     return mismatches
 
 
-def build_config_script(cycle, experiment, arms, subject):
-    """両アームの config root を作り直し、subject 記述子の configRoot 項目を置く。
-    null の項目は書かない。"""
-    release = release_path(cycle)
-    lines = ["set -e", "cd %s" % release]
-    template = load_session_contract(experiment)
-    config = subject["configRoot"]
-    always_apply = config["alwaysApplyFile"]
-    empty_rules = config["emptyRulesDir"]
-    cred_dest = config["credentialDest"]
-    cred_source = config["credentialSource"]
+def executor_template_path(subject_id):
+    value = load_environment()["subjects"][subject_id]["configTemplate"]
+    if value.startswith("/") or value.startswith("~"):
+        return value
+    return to_executor_path(resolve_control_path(value))
+
+
+def config_root_path(cycle, arm_id, subject_id):
+    return "%s/configs/%s/%s" % (
+        release_path(cycle), shlex.quote(arm_id), shlex.quote(subject_id)
+    )
+
+
+def build_config_script(cycle, experiment, arms, subjects):
+    """Clone each private template into configs/<arm>/<subject> and hash identity."""
+    lines = ["set -e"]
+    contract = load_session_contract(experiment)
     for arm in arms:
-        cfg = "cfg-%s" % arm["variant"]
-        lines.append("rm -rf %s" % shlex.quote(cfg))
-        lines.append("mkdir -p %s" % shlex.quote(cfg))
-        if empty_rules is not None:
-            lines.append("mkdir -p %s" % shlex.quote("%s/%s" % (cfg, empty_rules)))
-        if always_apply is not None:
-            body = template % (experiment, arm["variant"])
-            lines.append(
-                "cat > %s <<'CFGEOF'\n%sCFGEOF"
-                % (shlex.quote("%s/%s" % (cfg, always_apply)), body)
-            )
-        if cred_source is not None and cred_dest is not None:
-            lines.append(
-                "cp %s %s" % (cred_source, shlex.quote("%s/%s" % (cfg, cred_dest)))
-            )
-            lines.append("chmod 600 %s" % shlex.quote("%s/%s" % (cfg, cred_dest)))
+        for sid in subjects:
+            subject = load_subject(sid)
+            cfg = config_root_path(cycle, arm["id"], sid)
+            source = executor_template_path(sid)
+            lines.extend([
+                "rm -rf %s" % cfg,
+                "mkdir -p %s" % cfg,
+                "cp -a %s/. %s/" % (shlex.quote(source), cfg),
+            ])
+            marker = subject["markerFile"]
+            if marker is not None:
+                body = contract % (experiment, arm["variant"])
+                target = "%s/%s" % (cfg, shlex.quote(marker))
+                lines.append("mkdir -p \"$(dirname %s)\"" % target)
+                lines.append("cat > %s <<'CFGEOF'\n%sCFGEOF" % (target, body))
+            identity = " ".join(shlex.quote(p) for p in subject["identityPaths"])
+            lines.extend([
+                "identity=$({",
+                "  for rel in %s; do" % identity,
+                "    p=%s/$rel" % cfg,
+                "    if [ -f \"$p\" ]; then printf 'F %%s %%s\\n' \"$rel\" \"$(sha256sum \"$p\" | cut -d' ' -f1)\";" % (),
+                "    elif [ -d \"$p\" ]; then (cd %s && find \"$rel\" -type f -print0 | sort -z | xargs -0 -r sha256sum);" % cfg,
+                "    else echo \"missing identity path: $p\" >&2; exit 1; fi",
+                "  done",
+                "} | sha256sum | cut -d' ' -f1)",
+                "printf 'CONFIG %%s %%s %%s %%s\\n' %s %s \"$identity\" %s"
+                % (shlex.quote(arm["id"]), shlex.quote(sid), cfg),
+            ])
     return "\n".join(lines)
 
 
@@ -991,69 +983,69 @@ def handoff(cycle_name):
     require_subject(cycle_name, decl, require_version=False)
     experiment = decl["experiment"]
     ids = subject_ids(decl)
-    if len(ids) != 1:
-        raise SystemExit("handoff は subject 1つ")
-    subject = load_subject(ids[0])
-    if subject["versionCommand"] is None or subject["binary"] is None:
-        raise SystemExit(
-            "subject %s has unconfirmed versionCommand or binary; refusing to proceed"
-            % subject["id"]
-        )
 
     mismatches = collect_handoff_mismatches(cycle_name, decl)
     if mismatches:
         raise SystemExit("\n".join(mismatches))
 
-    version = exec_(subject["versionCommand"]).strip()
-    if "subjectVersion" in decl:
-        del decl["subjectVersion"]
-    versioned = {}
-    for key, value in decl.items():
-        versioned[key] = value
-        if key == "subject":
-            versioned["subjectVersion"] = version
-    decl = versioned
-    write_cycle(cycle_name, decl)
-    print("subject version: %s" % version)
-
-    exec_(build_config_script(cycle_name, experiment, decl["arms"], subject))
+    versions = {sid: exec_(load_subject(sid)["versionCommand"]).strip() for sid in ids}
+    config_out = exec_(build_config_script(cycle_name, experiment, decl["arms"], ids))
+    configs = {}
+    for line in config_out.splitlines():
+        if line.startswith("CONFIG "):
+            _tag, arm_id, sid, identity, path = line.split(" ", 4)
+            configs[(arm_id, sid)] = (identity, path)
+    for sid in ids:
+        identities = {configs[(arm["id"], sid)][0] for arm in decl["arms"]}
+        if len(identities) != 1:
+            raise SystemExit("mismatch: config identity differs across arms for %s" % sid)
 
     if cycle_kind(decl) != "estimation":
-        judge_path = "%s/experiments/%s/judge/judge.py" % (to_mnt(agent_rules_root()), experiment)
+        judge_path = "%s/experiments/%s/judge/judge.py" % (to_executor_path(variant_source_root()), experiment)
         for arm in decl["arms"]:
             out = exec_(build_baseline_script(cycle_name, judge_path, arm))
             print("baseline %s: %s" % (arm["id"], out.strip().replace("\n", " ")))
 
-    env = load_environment()
-    if env["host"] != "unix":
-        raise SystemExit(
-            "launch command printing is only defined for host=unix (got %r)" % env["host"]
-        )
-    print("")
-    for arm in sorted(decl["arms"], key=lambda a: a["variant"]):
-        print(
-            "wsl.exe -d %s -u %s -e bash -lc 'cd $HOME/releases/%s/%s && "
-            "%s=$HOME/releases/%s/cfg-%s %s'"
-            % (
-                env["distro"], env["user"], cycle_name, arm["id"],
-                subject["isolationEnv"], cycle_name, arm["variant"], subject["binary"],
+    executor = load_environment()["executor"]
+    record = {"schemaVersion": 1, "cycle": cycle_name,
+              "recordedAt": datetime.datetime.now().astimezone().isoformat(), "arms": []}
+    for arm in decl["arms"]:
+        arm_out = {"id": arm["id"], "subjects": []}
+        for sid in ids:
+            subject = load_subject(sid)
+            identity, cfg = configs[(arm["id"], sid)]
+            inner = "cd $HOME/releases/%s/%s && %s=%s %s" % (
+                cycle_name, arm["id"], subject["isolationEnv"], cfg, subject["binary"]
             )
-        )
+            if executor["kind"] == "wsl":
+                launch = "wsl.exe -d %s -u %s -e bash -lc %s" % (
+                    executor["distro"], executor["user"], shlex.quote(inner)
+                )
+            else:
+                launch = "bash -lc %s" % shlex.quote(inner)
+            arm_out["subjects"].append({
+                "id": sid, "version": versions[sid], "configIdentity": identity,
+                "configRoot": cfg, "launch": launch,
+            })
+            print(launch)
+        record["arms"].append(arm_out)
+    validate_against_schema(record, "handoff.schema.json", "handoff %s" % cycle_name)
+    handoff_path = os.path.join(CONTROL_DIR, "handoffs", "%s.json" % cycle_name)
+    if os.path.exists(handoff_path):
+        raise SystemExit("handoff record already exists: %s" % handoff_path)
+    atomic_write_json(handoff_path, record)
+    print("recorded: %s" % handoff_path)
 
 
-def _transcript_search_base(cycle_name, arm, search_root="config-root"):
+def _transcript_search_base(cycle_name, arm, subject_id, search_root="config-root"):
     """`_list_transcript_paths` が列挙する起点ディレクトリ。config-root は
-    アームの cfg-<variant> 配下、home-cursor は distro の $HOME/.cursor 配下
-    （cursor-agent の transcript は cfg 配下に置かれないため。実測は
-    docs/ISSUES.md 参照）。"""
+    configs/<arm>/<subject> 配下、home-cursor は executor user の $HOME/.cursor 配下。"""
     if search_root == "home-cursor":
         return '"$HOME"/.cursor'
-    release = release_path(cycle_name)
-    cfg = shlex.quote("cfg-%s" % arm["variant"])
-    return "%s/%s" % (release, cfg)
+    return config_root_path(cycle_name, arm["id"], subject_id)
 
 
-def _list_transcript_paths(cycle_name, arm, glob_pat, search_root="config-root"):
+def _list_transcript_paths(cycle_name, arm, subject_id, glob_pat, search_root="config-root"):
     """1つの glob で起点ディレクトリ（search_root）配下を列挙する。"""
     if search_root == "home-cursor":
         arm_path = '"$HOME"/releases/%s/%s' % (
@@ -1066,26 +1058,28 @@ def _list_transcript_paths(cycle_name, arm, glob_pat, search_root="config-root")
             check=False,
         )
         return [line.strip() for line in out.splitlines() if line.strip()]
-    base = _transcript_search_base(cycle_name, arm, search_root)
+    base = _transcript_search_base(cycle_name, arm, subject_id, search_root)
     pattern = "%s/%s" % (base, glob_pat)
     prefix = "shopt -s globstar; " if "**" in glob_pat else ""
     out, _stderr, _code = exec_("%sls %s 2>/dev/null" % (prefix, pattern), check=False)
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
-def find_transcripts(cycle_name, arm, decl=None):
-    """`$HOME/releases/<cycle>/cfg-<variant>/` 配下（または subject 記述子が
+def find_transcripts(cycle_name, arm, decl):
+    """`$HOME/releases/<cycle>/configs/<arm>/<subject>/` 配下（または subject 記述子が
     `searchRoot: home-cursor` を指すなら distro の `$HOME/.cursor` 配下）を、
     subjects/ 全記述子の transcripts.glob で列挙する。transcripts が null の
     subject は飛ばす。重複パスは1回。0件なら空リスト。発見した全件を返し、選ばない。
     decl は呼び出し互換のため受け取るが、列挙対象は宣言の subject に限らない。"""
-    del decl  # 宣言の subject だけに限らない。
     paths = []
     seen = set()
-    for subject in iter_transcript_subjects():
+    for sid in subject_ids(decl):
+        subject = load_subject(sid)
+        if subject["transcripts"] is None:
+            continue
         transcripts = subject["transcripts"]
         for line in _list_transcript_paths(
-            cycle_name, arm, transcripts["glob"], transcripts.get("searchRoot", "config-root")
+            cycle_name, arm, sid, transcripts["glob"], transcripts.get("searchRoot", "config-root")
         ):
             if line not in seen:
                 seen.add(line)
@@ -1109,18 +1103,18 @@ def cursor_project_slug(arm_path):
     return project_slug(trimmed)
 
 
-def transcript_slug_mismatch(arm, transcript):
+def transcript_slug_mismatch(arm, fact):
     """transcript の project ディレクトリ名が、そのアームのパスから導けるかを
     照合する。`cd <arm>` × isolation env var を別 cfg に向けた取り違えで、別の
     アームのセッションの証拠がこのアームの判定に使われる経路を塞ぐ。導けれ
     ば None、導けなければ mismatch 文字列を返す。armBinding == project-slug
     のときだけ呼ぶこと。"""
     # find_transcripts の glob により、transcript は必ず
-    # <release>/cfg-<variant>/projects/<slug>/<file>.jsonl の形をしている。
+    # <release>/configs/<arm>/<subject>/projects/<slug>/<file>.jsonl の形をしている。
+    transcript = fact["path"]
     parts = transcript.split("/")
     actual_slug = parts[-2]
-    release_root = "/".join(parts[:-4])
-    expected_slug = project_slug("%s/%s" % (release_root, arm["id"]))
+    expected_slug = project_slug(fact["armPath"])
     if actual_slug != expected_slug:
         return (
             "mismatch: %s transcript project slug %s does not derive from the arm path "
@@ -1130,9 +1124,7 @@ def transcript_slug_mismatch(arm, transcript):
 
 
 def derive_arm_path(arm, transcript):
-    """transcript パスに /cfg-<variant>/ があれば、その手前を release root とし
-    {release}/{arm.id} を返す。無ければ None。"""
-    marker = "/cfg-%s/" % arm["variant"]
+    marker = "/configs/%s/" % arm["id"]
     idx = transcript.find(marker)
     if idx < 0:
         return None
@@ -1145,7 +1137,7 @@ def classify_session(arm, fact):
     docs/EXECUTION-UNIT.md。"""
     binding = fact.get("armBinding")
     if binding == "project-slug":
-        mismatch = transcript_slug_mismatch(arm, fact["path"])
+        mismatch = transcript_slug_mismatch(arm, fact)
         if mismatch:
             return "does-not-belong", mismatch
         return "belongs", None
@@ -1301,16 +1293,19 @@ def build_transcript_facts_script(paths, participation, arm_binding=None):
     return "\n".join(lines)
 
 
-def transcript_facts(cycle_name, arm, decl=None):
+def transcript_facts(cycle_name, arm, decl):
     """アームの config root にある全 jsonl について、span と参加エントリ数を返す。
     subjects/ 全記述子を走査する。各 fact に tool / armBinding / armPath /
     （session-meta-cwd なら）cwd を付ける。"""
-    del decl
     facts = []
-    for subject in iter_transcript_subjects():
+    arm_path = exec_("realpath %s/%s" % (release_path(cycle_name), shlex.quote(arm["id"]))).strip()
+    for sid in subject_ids(decl):
+        subject = load_subject(sid)
+        if subject["transcripts"] is None:
+            continue
         transcripts = subject["transcripts"]
         paths = _list_transcript_paths(
-            cycle_name, arm, transcripts["glob"], transcripts.get("searchRoot", "config-root")
+            cycle_name, arm, sid, transcripts["glob"], transcripts.get("searchRoot", "config-root")
         )
         if not paths:
             continue
@@ -1324,16 +1319,13 @@ def transcript_facts(cycle_name, arm, decl=None):
         for item in payload:
             path = item["path"]
             fact = {
-                "tool": subject["id"],
+                "tool": sid,
                 "path": path,
                 "firstTimestamp": item.get("firstTimestamp"),
                 "lastTimestamp": item.get("lastTimestamp"),
                 "assistantCount": int(item["assistantCount"]),
                 "armBinding": arm_binding,
-                "armPath": (
-                    "%s/releases/%s/%s" % (path.partition("/.cursor/projects/")[0], cycle_name, arm["id"])
-                    if arm_binding == "cursor-project-slug" else derive_arm_path(arm, path)
-                ),
+                "armPath": arm_path,
             }
             if arm_binding == "session-meta-cwd":
                 fact["cwd"] = item.get("cwd")
@@ -1403,27 +1395,16 @@ def collect_execution_mismatches(arm, facts, commits):
     if missing_ts:
         return mismatches
 
-    start = min(
-        parse_timestamp(s["firstTimestamp"]) for s in belongs_participating
-    )
-    end = max(
-        parse_timestamp(s["lastTimestamp"]) for s in belongs_participating
-    )
-    first_label = min(
-        (s["firstTimestamp"] for s in belongs_participating),
-        key=parse_timestamp,
-    )
-    last_label = max(
-        (s["lastTimestamp"] for s in belongs_participating),
-        key=parse_timestamp,
-    )
     for sha, author_time in commits:
         moment = parse_timestamp(author_time)
-        if moment < start or moment > end:
+        if not any(
+            parse_timestamp(s["firstTimestamp"]) <= moment <= parse_timestamp(s["lastTimestamp"])
+            for s in belongs_participating
+        ):
             mismatches.append(
                 "mismatch: %s commit %s at %s is outside belonging participating "
-                "session span [%s, %s]"
-                % (arm["id"], sha, author_time, first_label, last_label)
+                "session spans"
+                % (arm["id"], sha, author_time)
             )
     return mismatches
 
@@ -1436,14 +1417,6 @@ def belonging_participating_sessions(arm, facts):
         if belonging == "belongs" and fact["assistantCount"] >= 1:
             out.append(fact)
     return out
-
-
-def participating_path(arm, facts):
-    """現行 judge.py 向け。belongs 参加がちょうど1件のときだけその path。"""
-    participating = belonging_participating_sessions(arm, facts)
-    if len(participating) != 1:
-        return None
-    return participating[0]["path"]
 
 
 def session_entries_for_record(arm, facts):
@@ -1474,48 +1447,23 @@ def baseline_arg(cycle_name, arm):
     return "%s/%s" % (release_path(cycle_name), shlex.quote("baseline-%s.json" % arm["id"]))
 
 
-def stat_mtime_to_iso8601(value):
-    """`stat -c %y` の出力（例: `2026-08-18 08:51:53.882533183 +0900`）を
-    オフセット付き ISO 8601 へ直す。ナノ秒はマイクロ秒へ切り詰める。"""
-    match = re.match(
-        r"^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?:\.(\d+))? ([+-]\d{2}):?(\d{2})$",
-        value.strip(),
-    )
-    if not match:
-        raise SystemExit("unrecognized stat mtime output: %r" % value)
-    date, hms, frac, offset_h, offset_m = match.groups()
-    micro = ((frac or "") + "000000")[:6]
-    return "%sT%s.%s%s:%s" % (date, hms, micro, offset_h, offset_m)
-
-
-def baseline_provenance(cycle_name, arm):
-    """記録へ書く baseline manifest の出所を distro 内で採る。返り値は
-    (path, sha256, mtime の ISO 8601)。path は sha256sum が出力した実パス
-    （`$HOME` 展開後）で、判定器が実際に受け取ったものと同じ。"""
-    baseline = baseline_arg(cycle_name, arm)
-    out = exec_("sha256sum %s && stat -c %%y %s" % (baseline, baseline))
-    lines = [line for line in out.splitlines() if line.strip()]
-    digest, _, path = lines[0].partition("  ")
-    return path, digest, stat_mtime_to_iso8601(lines[1])
-
-
-def build_judge_script(cycle_name, experiment, arm, transcript):
+def build_judge_script(cycle_name, experiment, arm, execution_path):
     """1アーム分の `judge.py judge` 呼び出し。判定が全 met でなければ判定器は
     exit 1 を返すが、それは正当な計測結果であって infra 失敗ではない。呼び
     出し元は returncode を 0/1 とそれ以外で扱い分ける。"""
     release = release_path(cycle_name)
-    judge_path = "%s/experiments/%s/judge/judge.py" % (to_mnt(agent_rules_root()), experiment)
-    workload_path = "%s/experiments/%s/workload.md" % (to_mnt(agent_rules_root()), experiment)
+    judge_path = "%s/experiments/%s/judge/judge.py" % (to_executor_path(variant_source_root()), experiment)
+    workload_path = "%s/experiments/%s/workload.md" % (to_executor_path(variant_source_root()), experiment)
     arm_path = "%s/%s" % (release, shlex.quote(arm["id"]))
     baseline_path = baseline_arg(cycle_name, arm)
     return (
-        "python3 %s judge --arm %s --workload %s --variant %s --transcript %s --baseline %s"
+        "python3 %s judge --arm %s --workload %s --variant %s --execution %s --baseline %s"
         % (
             shlex.quote(judge_path),
             arm_path,
             shlex.quote(workload_path),
             shlex.quote(arm["variant"]),
-            shlex.quote(transcript),
+            shlex.quote(to_executor_path(execution_path)),
             baseline_path,
         )
     )
@@ -1587,28 +1535,13 @@ def validate_record(record):
                 "criterion %s text not identical across arms: %s" % (number, texts)
             )
 
-    # フィールド間の比較はスキーマで書けない。baseline manifest は
-    # workload 実行前に採ったものなので、記録時刻より前でなければならない。
-    recorded_at = parse_timestamp(record["recordedAt"])
-    for arm in arms:
-        if parse_timestamp(arm["baselineRecordedAt"]) >= recorded_at:
-            mismatches.append(
-                "baselineRecordedAt %s is not before recordedAt %s for arm %s"
-                % (arm["baselineRecordedAt"], record["recordedAt"], arm["id"])
-            )
-        if arm["transcript"] not in arm["transcriptsDiscovered"]:
-            mismatches.append(
-                "transcript %s is not in transcriptsDiscovered for arm %s"
-                % (arm["transcript"], arm["id"])
-            )
-
     if mismatches:
         raise SystemExit("\n".join(mismatches))
     return None
 
 
 def judge(cycle_name, replace=False):
-    """判定器を両アームへ同一に適用し、記録を private-control/reviews/ へ
+    """判定器を両アームへ同一に適用し、記録を foundation-control/reviews/ へ
     書く。1つでも照合に落ちたら記録は書かず exit 非0にする（食い違いは
     全件集めてから出す）。既存記録の上書きは --replace の明示が要る。"""
     validate_identifier("cycle", cycle_name)
@@ -1622,9 +1555,9 @@ def judge(cycle_name, replace=False):
     experiment = decl["experiment"]
     mismatches = []
 
-    judge_win = os.path.join(agent_rules_root(), "experiments", experiment, "judge", "judge.py")
-    workload_win = os.path.join(agent_rules_root(), "experiments", experiment, "workload.md")
-    measurement_win = os.path.join(agent_rules_root(), "experiments", experiment, "MEASUREMENT.md")
+    judge_win = os.path.join(variant_source_root(), "experiments", experiment, "judge", "judge.py")
+    workload_win = os.path.join(variant_source_root(), "experiments", experiment, "workload.md")
+    measurement_win = os.path.join(variant_source_root(), "experiments", experiment, "MEASUREMENT.md")
     session_contract_win = session_contract_path(experiment)
     judge_sha256 = sha256_file(judge_win)
     workload_sha256 = sha256_file(workload_win)
@@ -1644,9 +1577,15 @@ def judge(cycle_name, replace=False):
     # 判定対象そのものの照合。上書きガードより先に行い、食い違いを全件まとめて
     # 出す（ここで落ちる限り記録は書かれないので、ガードの保証は変わらない）。
     materialized, _mat_error = load_materialized(cycle_name)
-    facts_by_arm = {}
-    transcripts_by_arm = {}
-    sessions_by_arm = {}
+    handoff_path = os.path.join(CONTROL_DIR, "handoffs", "%s.json" % cycle_name)
+    if not os.path.isfile(handoff_path):
+        raise SystemExit("handoff record not found: %s" % handoff_path)
+    with open(handoff_path, encoding="utf-8") as handle:
+        handoff_record = json.load(handle)
+    validate_against_schema(handoff_record, "handoff.schema.json", "handoff %s" % cycle_name)
+    handoff_by_arm = {arm["id"]: arm for arm in handoff_record["arms"]}
+    execution = {"schemaVersion": 1, "cycle": cycle_name,
+                 "recordedAt": datetime.datetime.now().astimezone().isoformat(), "arms": []}
     for arm in decl["arms"]:
         # 作業ツリーが汚れていると、判定器は git ではなく glob で読む以上、
         # 判定は作業ツリーの内容に対して行われるのに記録の armCommit はその
@@ -1658,28 +1597,40 @@ def judge(cycle_name, replace=False):
         if dirty.strip():
             mismatches.append("mismatch: %s tree is dirty:\n%s" % (arm["id"], dirty.strip()))
         facts = transcript_facts(cycle_name, arm, decl)
-        facts_by_arm[arm["id"]] = facts
-        sessions_by_arm[arm["id"]] = session_entries_for_record(arm, facts)
         injection = injection_commit_of(materialized, arm["id"])
         commits = load_commits_since(cycle_name, arm, injection) if injection else []
         mismatches.extend(collect_execution_mismatches(arm, facts, commits))
-        chosen = participating_path(arm, facts)
-        if chosen:
-            transcripts_by_arm[arm["id"]] = chosen
+        subjects_out = []
+        handoff_subjects = {item["id"]: item for item in handoff_by_arm[arm["id"]]["subjects"]}
+        for sid in subject_ids(decl):
+            sessions = [
+                entry for entry in session_entries_for_record(arm, facts)
+                if entry["tool"] == sid and entry["belonging"] == "belongs"
+                and entry["assistantCount"] >= 1
+            ]
+            if not sessions:
+                mismatches.append("mismatch: %s has no participating session for %s" % (arm["id"], sid))
+                continue
+            start = handoff_subjects[sid]
+            subjects_out.append({
+                "id": sid, "version": start["version"],
+                "configIdentity": start["configIdentity"], "launch": start["launch"],
+                "sessions": sessions,
+            })
+        execution["arms"].append({
+            "id": arm["id"], "subjects": subjects_out,
+            "commits": [{"sha": sha, "authoredAt": authored} for sha, authored in commits],
+        })
 
     mismatches.extend(collect_provenance_mismatches(cycle_name, decl))
 
     if mismatches:
         raise SystemExit("\n".join(mismatches))
 
-    for arm in decl["arms"]:
-        if arm["id"] not in transcripts_by_arm:
-            parts = belonging_participating_sessions(arm, facts_by_arm[arm["id"]])
-            raise SystemExit(
-                "mismatch: %s belonging participating sessions %d; "
-                "current judge.py takes exactly 1 transcript (aggregation is not implemented)"
-                % (arm["id"], len(parts))
-            )
+    validate_against_schema(execution, "execution.schema.json", "execution %s" % cycle_name)
+    execution_path = os.path.join(CONTROL_DIR, "executions", "%s.json" % cycle_name)
+    atomic_write_json(execution_path, execution)
+    execution_sha256 = sha256_file(execution_path)
 
     review_path = os.path.join(CONTROL_DIR, "reviews", "%s.json" % cycle_name)
     if os.path.exists(review_path):
@@ -1688,12 +1639,12 @@ def judge(cycle_name, replace=False):
                 existing = json.load(handle)
         except (ValueError, UnicodeDecodeError):
             raise SystemExit(
-                "existing record is not valid JSON (not schemaVersion 2); "
+                "existing record is not valid JSON (not schemaVersion 3); "
                 "refusing to overwrite even with --replace: %s" % review_path
             )
-        if not isinstance(existing, dict) or existing.get("schemaVersion") != 2:
+        if not isinstance(existing, dict) or existing.get("schemaVersion") != 3:
             raise SystemExit(
-                "existing record schemaVersion is %r (expected 2); "
+                "existing record schemaVersion is %r (expected 3); "
                 "refusing to overwrite even with --replace: %s"
                 % (
                     existing.get("schemaVersion") if isinstance(existing, dict) else type(existing).__name__,
@@ -1720,8 +1671,9 @@ def judge(cycle_name, replace=False):
 
     reports = {}
     for arm in decl["arms"]:
-        transcript = transcripts_by_arm[arm["id"]]
-        stdout, stderr, code = exec_(build_judge_script(cycle_name, experiment, arm, transcript), check=False)
+        stdout, stderr, code = exec_(
+            build_judge_script(cycle_name, experiment, arm, execution_path), check=False
+        )
         if code not in (0, 1):
             raise SystemExit(
                 "judge invocation failed for %s (exit %d): %s" % (arm["id"], code, stderr.strip())
@@ -1731,7 +1683,7 @@ def judge(cycle_name, replace=False):
         except ValueError as exc:
             mismatches.append("mismatch: %s judge output is not valid JSON: %s" % (arm["id"], exc))
             continue
-        reports[arm["id"]] = {"transcript": transcript, "report": report, "exitCode": code}
+        reports[arm["id"]] = {"report": report, "exitCode": code}
 
     # validate_arms が arm id の一意性を保証しているので、この等式は本来の
     # 意味（全アームの report が揃った）を持つ。重複 id で reports が潰れて
@@ -1766,9 +1718,6 @@ def judge(cycle_name, replace=False):
         arm_commit = exec_(
             "git -C %s/%s rev-parse HEAD" % (release_path(cycle_name), shlex.quote(arm["id"]))
         ).strip()
-        baseline_real_path, baseline_sha256, baseline_recorded_at = baseline_provenance(
-            cycle_name, arm
-        )
         arms_out.append({
             "id": arm["id"],
             "role": arm["role"],
@@ -1776,12 +1725,6 @@ def judge(cycle_name, replace=False):
             "variantTree": arm["variantTree"],
             "variantInjectionCommit": injection_by_id[arm["id"]],
             "armCommit": arm_commit,
-            "transcript": info["transcript"],
-            "transcriptsDiscovered": [fact["path"] for fact in facts_by_arm[arm["id"]]],
-            "sessions": sessions_by_arm[arm["id"]],
-            "baselinePath": baseline_real_path,
-            "baselineSha256": baseline_sha256,
-            "baselineRecordedAt": baseline_recorded_at,
             "workloadSha256": info["report"]["workloadSha256"],
             "judgeSha256": info["report"]["judgeSha256"],
             "judgeExitCode": info["exitCode"],
@@ -1789,22 +1732,19 @@ def judge(cycle_name, replace=False):
         })
 
     record = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "cycle": cycle_name,
         "experiment": experiment,
         "recordedAt": datetime.datetime.now().astimezone().isoformat(),
-        "subject": decl["subject"],
-        # require_subject が非空を保証済み。get() で null を通さない。
-        "subjectVersion": decl["subjectVersion"],
+        "subjects": decl["subjects"],
         "baseCommit": base_commit,
         "measurementSha256": measurement_sha256,
+        "executionSha256": execution_sha256,
         "arms": arms_out,
     }
 
     validate_record(record)
-    with open(review_path, "w", encoding="utf-8", newline="\n") as handle:
-        json.dump(record, handle, indent=2, ensure_ascii=False)
-        handle.write("\n")
+    atomic_write_json(review_path, record)
 
     for arm in decl["arms"]:
         info = reports[arm["id"]]
@@ -1917,19 +1857,14 @@ def _walk_strings(obj):
 
 
 def _reject_identity_leak(obj, label):
-    """次のいずれかを検出したら拒否する（dict のキーも値と同様に辿り、
-    比較はすべて大文字小文字を無視する。`wrapper/lib/ReleaseReview.ps1` の
-    Get-FoundationIdentityLeakNeedles が [StringComparer]::OrdinalIgnoreCase を
-    使うのに倣う）:
+    """次のいずれかを検出したら拒否する。dict のキーも値と同様に辿り、
+    比較はすべて大文字小文字を無視する。
 
     - Windows 絶対パス（ドライブレター + `:` + `\\` または `/`）
     - `\\wsl$` UNC パス
     - `/mnt/<drive>/...`（WSL 経由での Windows パス参照）
     - 実行環境の実 USERNAME（os.environ['USERNAME']）を大文字小文字無視で含む文字列
 
-    Get-FoundationIdentityLeakNeedles とは needle 集合が完全一致しない
-    （wslUser/wslHome/releasesRoot/localDataRoot を environment.json から読んで
-    needle 化することは、スコープが広がるためここでは行っていない）。
     `/home/ubuntu/...` のような WSL 側の絶対パスは上記のいずれにも一致しないので
     検出しない（凍結入力の member.source として意図的に許容している）。"""
     username = os.environ.get("USERNAME")
@@ -2102,7 +2037,7 @@ def _verify_estimator_artifacts(descriptor, estimators_dir):
 
 
 def load_estimator(estimator_id):
-    """private-control/estimators/<id>.json を読み、schema 検証して返す。"""
+    """foundation-control/estimators/<id>.json を読み、schema 検証して返す。"""
     validate_identifier("estimator id", estimator_id)
     path = estimator_path(estimator_id)
     if not os.path.isfile(path):
@@ -2173,7 +2108,7 @@ def freeze_arm(cycle_name, arm_id):
     if mismatches:
         raise SystemExit("\n".join(mismatches))
 
-    workload_win = os.path.join(agent_rules_root(), "experiments", experiment, "workload.md")
+    workload_win = os.path.join(variant_source_root(), "experiments", experiment, "workload.md")
     with open(workload_win, "rb") as handle:
         workload_bytes = handle.read()
     actual_workload_sha = hashlib.sha256(workload_bytes).hexdigest()
@@ -2184,7 +2119,7 @@ def freeze_arm(cycle_name, arm_id):
         )
 
     measurement_win = os.path.join(
-        agent_rules_root(), "experiments", experiment, "MEASUREMENT.md"
+        variant_source_root(), "experiments", experiment, "MEASUREMENT.md"
     )
     with open(measurement_win, "rb") as handle:
         measurement_bytes = handle.read()
@@ -2273,8 +2208,14 @@ def freeze_arm(cycle_name, arm_id):
 
     members.sort(key=lambda m: member_sort_key(m["id"]))
 
+    handoff_file = os.path.join(CONTROL_DIR, "handoffs", "%s.json" % cycle_name)
+    if not os.path.isfile(handoff_file):
+        raise SystemExit("handoff record not found: %s" % handoff_file)
+    with open(handoff_file, encoding="utf-8") as handle:
+        handoff = json.load(handle)
+    handoff_arm = next(item for item in handoff["arms"] if item["id"] == arm_id)
     manifest = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "kind": "frozen-input",
         "cycle": cycle_name,
         "experiment": experiment,
@@ -2282,8 +2223,11 @@ def freeze_arm(cycle_name, arm_id):
         "armRole": arm["role"],
         "variant": arm["variant"],
         "variantTree": arm["variantTree"],
-        "subject": decl["subject"],
-        "subjectVersion": decl["subjectVersion"],
+        "subjects": [
+            {"id": item["id"], "version": item["version"],
+             "configIdentity": item["configIdentity"]}
+            for item in handoff_arm["subjects"]
+        ],
         "declarationSha256": hashlib.sha256(decl_bytes).hexdigest(),
         "workloadSha256": actual_workload_sha,
         "measurementSha256": actual_measurement_sha,
@@ -2796,803 +2740,347 @@ def calibrate(cycle_name, arm_id, estimator_id, prepare=False, input_path=None, 
         calibrate_input(cycle_name, arm_id, estimator_id, input_path, replace=replace)
 
 
-def selfcheck(check_active_environment=False):
-    """照合関数を実資産に触れずに検査する。環境記述子の実ファイルは読まない。"""
-    global FROZEN_DIR, ESTIMATORS_DIR, CALIBRATIONS_DIR, CONTROL_DIR
-    # The descriptor parent, rather than this repository's sibling layout, is
-    # the control root.  Exercise both supported agentRulesRoot forms in
-    # unrelated temporary locations without invoking a subject or WSL.
-    old_environment_path = ENVIRONMENT_PATH
+def run_host(argv, cwd=None, check=True):
+    result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, encoding="utf-8")
+    if check and result.returncode != 0:
+        raise SystemExit(
+            "%s failed (%d): %s" % (" ".join(argv), result.returncode, result.stderr.strip())
+        )
+    return result
+
+
+def git_host(root, *args, check=True):
+    return run_host(["git", "-C", root, *args], check=check)
+
+
+def managed_digest(root):
+    hasher = hashlib.sha256()
+    for relative in MANAGED_ITEMS:
+        path = os.path.join(root, relative.replace("/", os.sep))
+        if not os.path.exists(path):
+            raise SystemExit("managed source is missing: %s" % path)
+        files = []
+        if os.path.isdir(path):
+            for current, dirs, names in os.walk(path):
+                dirs.sort()
+                files.extend(os.path.join(current, name) for name in sorted(names))
+        else:
+            files.append(path)
+        for filename in files:
+            rel = os.path.relpath(filename, root).replace(os.sep, "/")
+            hasher.update(rel.encode("utf-8") + b"\0")
+            with open(filename, "rb") as handle:
+                for chunk in iter(lambda: handle.read(65536), b""):
+                    hasher.update(chunk)
+            hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
+def sync_managed(source, destination):
+    for relative in MANAGED_ITEMS:
+        src = os.path.join(source, relative.replace("/", os.sep))
+        dest = os.path.join(destination, relative.replace("/", os.sep))
+        if os.path.isdir(dest):
+            shutil.rmtree(dest)
+        elif os.path.exists(dest):
+            os.unlink(dest)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copytree(src, dest) if os.path.isdir(src) else shutil.copy2(src, dest)
+
+
+def renderer_and_stable_tests(root):
+    renderer = os.path.join(root, "bin", "rules.py")
+    with tempfile.TemporaryDirectory(prefix="renderer-smoke-", dir=CONTROL_DIR) as workspace:
+        run_host([sys.executable, renderer, "render", workspace], cwd=root)
+        run_host([sys.executable, renderer, "verify", workspace], cwd=root)
+    tests = os.path.join(root, "tests", "test_rules.py")
+    if os.path.isfile(tests):
+        run_host([sys.executable, tests], cwd=root)
+
+
+def promotion_reasons(cycle_name, decl, review):
+    reasons = []
+    if review.get("schemaVersion") != 3 or review.get("cycle") != cycle_name:
+        return ["review identity or schemaVersion is invalid"]
+    arms = review.get("arms") or []
+    control = [arm for arm in arms if arm.get("role") == "control"]
+    treatment = [arm for arm in arms if arm.get("role") == "treatment"]
+    if len(control) != 1 or len(treatment) != 1:
+        return ["review must contain exactly one control and one treatment"]
+    declared = {arm["id"]: arm["variantTree"] for arm in decl["arms"]}
+    for arm in arms:
+        if declared.get(arm.get("id")) != arm.get("variantTree"):
+            reasons.append("variant tree differs between declaration and review for %s" % arm.get("id"))
+    if any(item.get("result") == "unknown" for arm in arms for item in arm.get("criteria", [])):
+        reasons.append("review contains unknown criteria")
+    c = {(item["criterion"], item["text"]): item["result"] for item in control[0]["criteria"]}
+    t = {(item["criterion"], item["text"]): item["result"] for item in treatment[0]["criteria"]}
+    comparable = set(c) & set(t)
+    if not any(t[key] == "met" and c[key] != "met" for key in comparable):
+        reasons.append("no attributable effect")
+    if any(c[key] == "met" and t[key] != "met" for key in comparable):
+        reasons.append("review contains regression")
+    if any((c.get(key) or t.get(key)) != "met" for key in set(c) ^ set(t)):
+        reasons.append("incomparable criteria are not all met")
+    return reasons
+
+
+def promotion_path(cycle_name):
+    return os.path.join(CONTROL_DIR, "promotions", "%s.json" % cycle_name)
+
+
+def rollback_path(cycle_name):
+    return os.path.join(CONTROL_DIR, "rollbacks", "%s.json" % cycle_name)
+
+
+def promote(cycle_name):
+    validate_identifier("cycle", cycle_name)
+    decl = load_cycle(cycle_name)
+    validate_arms(cycle_name, decl)
+    if cycle_kind(decl) != "measurement":
+        raise SystemExit("only a measurement cycle can be promoted")
+    treatment = next(arm for arm in decl["arms"] if arm["role"] == "treatment")
+    review_path = os.path.join(CONTROL_DIR, "reviews", "%s.json" % cycle_name)
+    if not os.path.isfile(review_path):
+        raise SystemExit("review not found: %s" % review_path)
+    with open(review_path, encoding="utf-8") as handle:
+        review = json.load(handle)
+    review_sha = sha256_file(review_path)
+    record_path = promotion_path(cycle_name)
+    source = variant_canonical_dir(decl["experiment"], treatment["variant"])
+    target_digest = managed_digest(source)
+    stable = stable_rules_root()
+    branch = load_environment()["stableRules"]["branch"]
+    old_head = git_host(stable, "rev-parse", "HEAD").stdout.strip()
+    old_digest = managed_digest(stable)
+
+    if os.path.exists(record_path):
+        with open(record_path, encoding="utf-8") as handle:
+            record = json.load(handle)
+        validate_against_schema(record, "promotion.schema.json", "promotion %s" % cycle_name)
+        if record["reviewSha256"] != review_sha or record["variantTree"] != treatment["variantTree"]:
+            raise SystemExit("prepared promotion inputs drifted: %s" % cycle_name)
+        if record["status"] == "promoted":
+            if old_head != record["newStableCommit"]:
+                raise SystemExit("stable HEAD moved after promotion: %s" % old_head)
+            print("already promoted: %s" % record["newStableCommit"])
+            return
+        if record["status"] == "not-promoted":
+            print("not promoted: %s" % "; ".join(record["reasons"]))
+            return
+        if old_head not in (record["oldStableCommit"], record["newStableCommit"]):
+            raise SystemExit("stable HEAD does not match prepared promotion")
+        if old_head == record["oldStableCommit"]:
+            git_host(stable, "merge", "--ff-only", record["newStableCommit"])
+        if managed_digest(stable) != record["managedDigest"]:
+            raise SystemExit("stable managed digest differs from prepared promotion")
+        record["status"] = "promoted"
+        record["recordedAt"] = datetime.datetime.now().astimezone().isoformat()
+        atomic_write_json(record_path, record)
+        print("promoted: %s" % record["newStableCommit"])
+        return
+
+    reasons = promotion_reasons(cycle_name, decl, review)
+    reasons.extend(verify_canonical(decl["experiment"], treatment))
+    if git_host(stable, "status", "--porcelain").stdout.strip():
+        reasons.append("stable worktree is dirty")
+    if git_host(stable, "branch", "--show-current").stdout.strip() != branch:
+        reasons.append("stable branch is not %s" % branch)
+    record = {
+        "schemaVersion": 1, "cycle": cycle_name,
+        "recordedAt": datetime.datetime.now().astimezone().isoformat(),
+        "status": "not-promoted", "reviewSha256": review_sha,
+        "variantTree": treatment["variantTree"], "oldManagedDigest": old_digest,
+        "managedDigest": target_digest, "oldStableCommit": old_head,
+        "newStableCommit": None, "reasons": reasons,
+    }
+    if reasons:
+        validate_against_schema(record, "promotion.schema.json", "promotion %s" % cycle_name)
+        atomic_write_json(record_path, record)
+        print("not promoted: %s" % "; ".join(reasons))
+        return
+
+    temporary = tempfile.mkdtemp(prefix="promotion-", dir=CONTROL_DIR)
+    try:
+        git_host(stable, "worktree", "add", "--detach", temporary, branch)
+        try:
+            sync_managed(source, temporary)
+            if managed_digest(temporary) != target_digest:
+                raise SystemExit("managed source digest mismatch after sync")
+            renderer_and_stable_tests(temporary)
+        except SystemExit as exc:
+            record.update({"status": "not-promoted", "newStableCommit": None,
+                           "reasons": [str(exc)]})
+            validate_against_schema(record, "promotion.schema.json", "promotion %s" % cycle_name)
+            atomic_write_json(record_path, record)
+            print("not promoted: %s" % exc)
+            return
+        git_host(temporary, "add", "--", *MANAGED_ITEMS)
+        if git_host(temporary, "diff", "--cached", "--quiet", check=False).returncode == 0:
+            raise SystemExit("treatment source is already the stable managed source")
+        git_host(temporary, "commit", "-m", "promote rule experiment %s" % cycle_name)
+        new_head = git_host(temporary, "rev-parse", "HEAD").stdout.strip()
+        record.update({"status": "prepared", "newStableCommit": new_head})
+        validate_against_schema(record, "promotion.schema.json", "promotion %s" % cycle_name)
+        atomic_write_json(record_path, record)
+        git_host(stable, "merge", "--ff-only", new_head)
+        if managed_digest(stable) != target_digest:
+            raise SystemExit("stable managed digest differs after fast-forward")
+        record["status"] = "promoted"
+        record["recordedAt"] = datetime.datetime.now().astimezone().isoformat()
+        atomic_write_json(record_path, record)
+        print("promoted: %s" % new_head)
+    finally:
+        git_host(stable, "worktree", "remove", "--force", temporary, check=False)
+        if os.path.isdir(temporary):
+            shutil.rmtree(temporary)
+
+
+def rollback(cycle_name):
+    validate_identifier("cycle", cycle_name)
+    record_file = promotion_path(cycle_name)
+    if not os.path.isfile(record_file):
+        raise SystemExit("promotion record not found: %s" % record_file)
+    with open(record_file, encoding="utf-8") as handle:
+        promotion = json.load(handle)
+    validate_against_schema(promotion, "promotion.schema.json", "promotion %s" % cycle_name)
+    if promotion["status"] != "promoted":
+        raise SystemExit("cycle is not promoted: %s" % cycle_name)
+    promoted = []
+    directory = os.path.join(CONTROL_DIR, "promotions")
+    for name in os.listdir(directory):
+        try:
+            with open(os.path.join(directory, name), encoding="utf-8") as handle:
+                item = json.load(handle)
+            if item.get("schemaVersion") == 1 and item.get("status") == "promoted":
+                promoted.append(item)
+        except (OSError, ValueError):
+            continue
+    latest = max(promoted, key=lambda item: parse_timestamp(item["recordedAt"]))
+    if latest["cycle"] != cycle_name:
+        raise SystemExit("only the latest promotion can be rolled back")
+    stable = stable_rules_root()
+    head = git_host(stable, "rev-parse", "HEAD").stdout.strip()
+    output = rollback_path(cycle_name)
+    if os.path.exists(output):
+        with open(output, encoding="utf-8") as handle:
+            existing = json.load(handle)
+        validate_against_schema(existing, "rollback.schema.json", "rollback %s" % cycle_name)
+        if existing["status"] == "rolled-back":
+            if head != existing["newStableCommit"]:
+                raise SystemExit("stable HEAD moved after rollback")
+            print("already rolled back: %s" % existing["newStableCommit"])
+            return
+        if head not in (existing["oldStableCommit"], existing["newStableCommit"]):
+            raise SystemExit("stable HEAD does not match prepared rollback")
+        if head == existing["oldStableCommit"]:
+            git_host(stable, "merge", "--ff-only", existing["newStableCommit"])
+        if managed_digest(stable) != existing["restoredManagedDigest"]:
+            raise SystemExit("stable managed digest differs from prepared rollback")
+        existing["status"] = "rolled-back"
+        existing["recordedAt"] = datetime.datetime.now().astimezone().isoformat()
+        atomic_write_json(output, existing)
+        print("rolled back: %s" % existing["newStableCommit"])
+        return
+    if head != promotion["newStableCommit"]:
+        raise SystemExit("stable HEAD is not the recorded promotion commit")
+    if git_host(stable, "status", "--porcelain").stdout.strip():
+        raise SystemExit("stable worktree is dirty")
+    temporary = tempfile.mkdtemp(prefix="rollback-", dir=CONTROL_DIR)
+    try:
+        git_host(stable, "worktree", "add", "--detach", temporary, head)
+        git_host(temporary, "revert", "--no-edit", promotion["newStableCommit"])
+        if managed_digest(temporary) != promotion["oldManagedDigest"]:
+            raise SystemExit("rollback did not restore the prior managed digest")
+        renderer_and_stable_tests(temporary)
+        new_head = git_host(temporary, "rev-parse", "HEAD").stdout.strip()
+        record = {
+            "schemaVersion": 1, "cycle": cycle_name,
+            "recordedAt": datetime.datetime.now().astimezone().isoformat(),
+            "status": "prepared", "reviewSha256": promotion["reviewSha256"],
+            "variantTree": promotion["variantTree"],
+            "promotionCommit": promotion["newStableCommit"],
+            "oldStableCommit": head, "newStableCommit": new_head,
+            "promotedManagedDigest": promotion["managedDigest"],
+            "restoredManagedDigest": promotion["oldManagedDigest"],
+        }
+        validate_against_schema(record, "rollback.schema.json", "rollback %s" % cycle_name)
+        atomic_write_json(output, record)
+        git_host(stable, "merge", "--ff-only", new_head)
+        record["status"] = "rolled-back"
+        record["recordedAt"] = datetime.datetime.now().astimezone().isoformat()
+        atomic_write_json(output, record)
+        print("rolled back: %s" % new_head)
+    finally:
+        git_host(stable, "worktree", "remove", "--force", temporary, check=False)
+        if os.path.isdir(temporary):
+            shutil.rmtree(temporary)
+
+
+def core_selfcheck(check_active_environment=False):
     if check_active_environment:
         load_environment()
-        assert CONTROL_DIR == os.path.dirname(ENVIRONMENT_PATH)
-        assert agent_rules_root()
-    try:
-        with tempfile.TemporaryDirectory(prefix="cycle-selfcheck-environment-") as env_root:
-            control_dir = os.path.join(env_root, "private-control")
-            relative_rules = os.path.join(env_root, "unrelated-rules")
-            absolute_rules = os.path.join(env_root, "another-rules")
-            os.makedirs(control_dir)
-            os.makedirs(relative_rules)
-            os.makedirs(absolute_rules)
-            descriptor_path = os.path.join(control_dir, "environment.json")
-
-            with open(descriptor_path, "w", encoding="utf-8", newline="\n") as handle:
-                json.dump(
-                    {"host": "windows", "agentRulesRoot": "../unrelated-rules"},
-                    handle,
-                )
-            configure_environment(descriptor_path)
-            assert CONTROL_DIR == control_dir
-            assert agent_rules_root() == relative_rules
-            assert FROZEN_DIR == os.path.join(control_dir, "frozen")
-
-            with open(descriptor_path, "w", encoding="utf-8", newline="\n") as handle:
-                json.dump(
-                    {"host": "windows", "agentRulesRoot": absolute_rules},
-                    handle,
-                )
-            configure_environment(descriptor_path)
-            assert agent_rules_root() == absolute_rules
-    finally:
-        configure_environment(old_environment_path)
-
-    arm = {"id": "arm-control", "variant": "control"}
-    arm_path = "/home/ubuntu/releases/cyc/arm-control"
-    good = (
-        "/home/ubuntu/releases/cyc/cfg-control/projects/"
-        "-home-ubuntu-releases-cyc-arm-control/a.jsonl"
-    )
-    other = (
-        "/home/ubuntu/releases/cyc/cfg-control/projects/"
-        "-home-ubuntu-releases-cyc-arm-treatment/b.jsonl"
-    )
-    codex_path = (
-        "/home/ubuntu/releases/cyc/cfg-control/sessions/"
-        "2026/08/18/rollout-a.jsonl"
-    )
-
-    def fact(path, first, last, count, binding="project-slug", cwd=None, tool="claude-code"):
-        item = {
-            "tool": tool,
-            "path": path,
-            "firstTimestamp": first,
-            "lastTimestamp": last,
-            "assistantCount": count,
-            "armBinding": binding,
-            "armPath": arm_path,
-        }
-        if binding == "session-meta-cwd":
-            item["cwd"] = cwd
-        return item
-
-    span_first = "2026-08-18T09:15:12.901Z"
-    span_last = "2026-08-18T09:20:04.233Z"
-    inside = "2026-08-18T18:16:46+09:00"
-    outside = "2026-08-18T09:00:00+09:00"
-
-    multi = collect_execution_mismatches(
-        arm,
-        [
-            fact(good, span_first, span_last, 1, "project-slug"),
-            fact(codex_path, span_first, span_last, 1, "session-meta-cwd", cwd=arm_path, tool="codex"),
-        ],
-        [],
-    )
-    assert multi == [], multi
-
-    unclassifiable = collect_execution_mismatches(
-        arm,
-        [
-            fact(good, span_first, span_last, 1, "project-slug"),
-            fact(codex_path, span_first, span_last, 1, "session-meta-cwd", cwd=None, tool="codex"),
-        ],
-        [],
-    )
-    assert any("unclassifiable" in item for item in unclassifiable), unclassifiable
-
-    zero = collect_execution_mismatches(
-        arm, [fact(good, span_first, span_last, 0)], []
-    )
-    assert any("belonging participating session count 0" in item for item in zero), zero
-
-    ok = collect_execution_mismatches(
-        arm, [fact(good, span_first, span_last, 1)], [("d3afb44", inside)]
-    )
-    assert ok == [], ok
-
-    spilled = collect_execution_mismatches(
-        arm, [fact(good, span_first, span_last, 1)], [("deadbeef", outside)]
-    )
-    assert any("outside belonging participating" in item for item in spilled), spilled
-
-    on_first = collect_execution_mismatches(
-        arm, [fact(good, span_first, span_last, 1)], [("bound1", span_first)]
-    )
-    assert on_first == [], on_first
-
-    on_last = collect_execution_mismatches(
-        arm, [fact(good, span_first, span_last, 1)], [("bound2", span_last)]
-    )
-    assert on_last == [], on_last
-
-    no_ts = collect_execution_mismatches(
-        arm, [fact(good, None, None, 1)], [("d3afb44", inside)]
-    )
-    assert any("has no timestamp" in item for item in no_ts), no_ts
-
-    mixed = collect_execution_mismatches(
-        arm, [fact(other, span_first, span_last, 1)], []
-    )
-    assert any("project slug" in item for item in mixed), mixed
-
     for name in sorted(os.listdir(SUBJECTS_DIR)):
-        if not name.endswith(".json"):
-            continue
-        sid = name[:-5]
-        subject = load_subject(sid)
-        assert subject["id"] == sid
-
-    default_base = _transcript_search_base("cyc", arm)
-    assert "cfg-control" in default_base, default_base
-    assert ".cursor" not in default_base, default_base
-    cursor_base = _transcript_search_base("cyc", arm, "home-cursor")
-    assert cursor_base == '"$HOME"/.cursor', cursor_base
-    assert "cfg-" not in cursor_base, cursor_base
-
-    slug_arm_path = "/home/ubuntu/releases/cyc/arm-control"
-    assert project_slug(slug_arm_path) == "-home-ubuntu-releases-cyc-arm-control"
-    assert cursor_project_slug(slug_arm_path) == "home-ubuntu-releases-cyc-arm-control"
-    assert cursor_project_slug(slug_arm_path) != project_slug(slug_arm_path)
-    cursor_fact = fact(
-        "/home/ubuntu/.cursor/projects/home-ubuntu-releases-cyc-arm-control/"
-        "agent-transcripts/2026/rollout.jsonl",
-        span_first, span_last, 1, "cursor-project-slug",
-    )
-    assert classify_session(arm, cursor_fact) == ("belongs", None)
-    cursor_fact["path"] = cursor_fact["path"].replace("arm-control", "other")
-    assert classify_session(arm, cursor_fact)[0] == "does-not-belong"
-
-    codex_participation = {
-        "all": [
-            {"jsonlField": "type", "equals": "response_item"},
-            {"jsonlField": "payload.role", "equals": "assistant"},
-        ]
+        if name.endswith(".json"):
+            load_subject(name[:-5])
+    sha = "a" * 64
+    tree = "b" * 40
+    base = {
+        "cycle": "check", "experiment": "check", "kind": "measurement",
+        "subjects": ["claude-code"], "workloadHash": sha,
+        "measurementHash": sha, "judgeHash": sha, "sessionContractHash": sha,
+        "executionUnitHash": sha,
+        "base": {"repo": ".", "commit": tree},
+        "arms": [
+            {"id": "c", "role": "control", "variant": "v1", "variantTree": tree},
+            {"id": "t", "role": "treatment", "variant": "v2", "variantTree": tree},
+        ],
     }
-    codex_lines = [
-        {"type": "response_item", "payload": {"role": "assistant"}, "timestamp": "2026-08-18T00:00:00Z"},
-        {"type": "response_item", "payload": {"role": "user"}, "timestamp": "2026-08-18T00:00:01Z"},
-        {"type": "session_meta", "payload": {"role": "assistant"}, "timestamp": "2026-08-18T00:00:02Z"},
-        {"type": "response_item", "payload": {}, "timestamp": "2026-08-18T00:00:03Z"},
+    validate_against_schema(base, "cycle.schema.json", "selfcheck measurement")
+    invalid = dict(base)
+    invalid["arms"] = base["arms"] + [
+        {"id": "t2", "role": "treatment", "variant": "v3", "variantTree": tree}
     ]
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
-    ) as handle:
-        for obj in codex_lines:
-            handle.write(json.dumps(obj) + "\n")
-        codex_fixture_path = handle.name
     try:
-        script = build_transcript_facts_script(
-            [codex_fixture_path], codex_participation, arm_binding="session-meta-cwd"
-        )
-        inner = script.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
-        proc = subprocess.run(
-            [sys.executable, "-c", inner], capture_output=True, text=True,
-        )
-        assert proc.returncode == 0, proc.stderr
-        payload = json.loads(proc.stdout)
-        assert payload[0]["assistantCount"] == 1, payload
-    finally:
-        os.remove(codex_fixture_path)
-
-    example_path = os.path.join(SCHEMAS_DIR, "environment.example.json")
-    with open(example_path, encoding="utf-8") as handle:
-        example = json.load(handle)
-    validate_against_schema(example, "environment.schema.json", "environment.example")
-
-    # ---- 推定サイクル宣言（kind / judgeHash 条件付き必須）。----
-    assert cycle_kind({}) == "measurement"
-    assert cycle_kind({"kind": "measurement"}) == "measurement"
-    assert cycle_kind({"kind": "estimation"}) == "estimation"
-
-    def _kind_arm(arm_id, role, variant):
-        return {
-            "id": arm_id,
-            "role": role,
-            "variant": variant,
-            "variantTree": "a" * 40,
-        }
-
-    def _kind_decl(arms, kind=None, with_judge=True):
-        decl = {
-            "cycle": "selfcheck-kind",
-            "experiment": "selfcheck-experiment",
-            "subject": "claude-code",
-            "workloadHash": "a" * 64,
-            "measurementHash": "b" * 64,
-            "sessionContractHash": "c" * 64,
-            "executionUnitHash": "d" * 64,
-            "arms": arms,
-        }
-        if kind is not None:
-            decl["kind"] = kind
-        if with_judge:
-            decl["judgeHash"] = "e" * 64
-        return decl
-
-    def _kind_expect_exit(fn, *args, **kwargs):
-        try:
-            fn(*args, **kwargs)
-        except SystemExit:
-            return True
-        return False
-
-    one_arm = [_kind_arm("arm-only", "treatment", "v1")]
-    two_arms = [
-        _kind_arm("arm-control", "control", "v1"),
-        _kind_arm("arm-treatment", "treatment", "v2"),
-    ]
-    two_treatment = [
-        _kind_arm("arm-a", "treatment", "v1"),
-        _kind_arm("arm-b", "treatment", "v2"),
-    ]
-
-    est_ok = _kind_decl(one_arm, kind="estimation", with_judge=False)
-    validate_against_schema(est_ok, "cycle.schema.json", "selfcheck estimation")
-    validate_arms("selfcheck-kind", est_ok)
-
-    est_with_judge = _kind_decl(one_arm, kind="estimation", with_judge=True)
-    validate_against_schema(est_with_judge, "cycle.schema.json", "selfcheck estimation+judge")
-
-    assert _kind_expect_exit(
-        validate_arms, "selfcheck-kind", _kind_decl(two_arms, kind="estimation")
-    )
-    assert _kind_expect_exit(
-        validate_arms, "selfcheck-kind", _kind_decl(one_arm)
-    )
-    assert _kind_expect_exit(
-        validate_arms, "selfcheck-kind", _kind_decl(two_treatment)
-    )
-    validate_arms("selfcheck-kind", _kind_decl(two_arms))
-    validate_arms("selfcheck-kind", _kind_decl(two_arms, kind="measurement"))
-
-    assert _kind_expect_exit(
-        validate_against_schema,
-        _kind_decl(two_arms, with_judge=False),
-        "cycle.schema.json",
-        "selfcheck missing judgeHash",
-    )
-    assert _kind_expect_exit(
-        validate_against_schema,
-        _kind_decl(two_arms, kind="measurement", with_judge=False),
-        "cycle.schema.json",
-        "selfcheck measurement missing judgeHash",
-    )
-
-    global CYCLES_DIR
-    old_cycles_dir = CYCLES_DIR
-    kind_cycles_dir = tempfile.mkdtemp()
-    try:
-        CYCLES_DIR = kind_cycles_dir
-        est_path = os.path.join(kind_cycles_dir, "selfcheck-est-judge.json")
-        with open(est_path, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump(est_ok, handle)
-            handle.write("\n")
-        try:
-            judge("selfcheck-est-judge")
-            raise AssertionError("estimation judge should exit")
-        except SystemExit as exc:
-            msg = str(exc)
-            assert "estimation" in msg and "judge" in msg, msg
-    finally:
-        CYCLES_DIR = old_cycles_dir
-        for name in os.listdir(kind_cycles_dir):
-            os.remove(os.path.join(kind_cycles_dir, name))
-        os.rmdir(kind_cycles_dir)
-
-    present = {
-        "CONSTITUTION.md": "a" * 64,
-        "TERMS.md": "b" * 64,
+        validate_against_schema(invalid, "cycle.schema.json", "selfcheck invalid measurement")
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("measurement with three arms passed schema")
+    review = {
+        "schemaVersion": 3, "cycle": "check",
+        "arms": [
+            {"id": "c", "role": "control", "variantTree": tree,
+             "criteria": [{"criterion": 1, "text": "effect", "result": "not-met"}]},
+            {"id": "t", "role": "treatment", "variantTree": tree,
+             "criteria": [{"criterion": 1, "text": "effect", "result": "met"}]},
+        ],
     }
-    good_hash = meta_readability_hash(present)
-    assert collect_meta_readability_mismatches(
-        ["CONSTITUTION.md", "TERMS.md"], good_hash, present
+    assert promotion_reasons("check", base, review) == []
+    review["arms"][0]["criteria"][0]["result"] = "met"
+    assert "no attributable effect" in promotion_reasons("check", base, review)
+    review["arms"][1]["criteria"][0]["result"] = "not-met"
+    assert "review contains regression" in promotion_reasons("check", base, review)
+    review["arms"][1]["criteria"][0]["result"] = "unknown"
+    assert "review contains unknown criteria" in promotion_reasons("check", base, review)
+    arm = {"id": "c", "variant": "v1"}
+    fact = {
+        "tool": "claude-code", "path": "/tmp/x/projects/-tmp-arm/session.jsonl",
+        "firstTimestamp": "2026-01-01T00:00:00+00:00",
+        "lastTimestamp": "2026-01-01T00:01:00+00:00", "assistantCount": 1,
+        "armBinding": "session-meta-cwd", "armPath": "/tmp/arm", "cwd": "/tmp/arm",
+    }
+    assert collect_execution_mismatches(
+        arm, [fact], [(tree, "2026-01-01T00:00:30+00:00")]
     ) == []
-    bad_hash = collect_meta_readability_mismatches(
-        ["CONSTITUTION.md", "TERMS.md"], "0" * 64, present
+    assert collect_execution_mismatches(
+        arm, [fact], [(tree, "2026-01-01T00:02:00+00:00")]
     )
-    assert any("metaReadabilityHash" in item for item in bad_hash), bad_hash
-    wrong_file = dict(present)
-    wrong_file["CONSTITUTION.md"] = "c" * 64
-    bad_file = collect_meta_readability_mismatches(
-        ["CONSTITUTION.md", "TERMS.md"], good_hash, wrong_file
-    )
-    assert any("metaReadabilityHash" in item for item in bad_file), bad_file
-    extra = dict(present)
-    extra["docs/RULE-EXPERIMENT.md"] = "d" * 64
-    bad_extra = collect_meta_readability_mismatches(
-        ["CONSTITUTION.md", "TERMS.md"], good_hash, extra
-    )
-    assert any("undeclared readability" in item for item in bad_extra), bad_extra
-    bad_missing = collect_meta_readability_mismatches(
-        ["CONSTITUTION.md", "TERMS.md", "docs/EXECUTION-UNIT.md"],
-        good_hash,
-        present,
-    )
-    assert any("absent on the arm" in item for item in bad_missing), bad_missing
-
-    assert subject_ids({"subject": "claude-code"}) == ["claude-code"]
-    assert subject_ids({"subject": ["claude-code", "codex"]}) == ["claude-code", "codex"]
-
-    # ---- 推定機構（freeze / estimate / calibrate）。実資産に触れず、
-    # 合成データだけを使う。----
-
-    def _expect_system_exit(fn, *args, **kwargs):
-        try:
-            fn(*args, **kwargs)
-        except SystemExit:
-            return True
-        return False
-
-    sample_obj = {"b": 1, "a": 2, "nested": {"y": 2, "x": 1}}
-    assert content_hash(sample_obj) == content_hash({"nested": {"x": 1, "y": 2}, "a": 2, "b": 1})
-
-    member_decl = {
-        "id": "declaration", "kind": "declaration", "path": "payload/declaration.json",
-        "source": "apparatus/cycles/selfcheck-cycle.json", "sha256": "a" * 64, "bytes": 1,
-    }
-    member_workload = {
-        "id": "workload", "kind": "workload", "path": "payload/workload.md",
-        "source": "agent-rules/experiments/selfcheck-experiment/workload.md",
-        "sha256": "b" * 64, "bytes": 2,
-    }
-    member_measurement = {
-        "id": "measurement", "kind": "measurement", "path": "payload/measurement.md",
-        "source": "agent-rules/experiments/selfcheck-experiment/MEASUREMENT.md",
-        "sha256": "c" * 64, "bytes": 3,
-    }
-    member_variant = {
-        "id": "variant-injection", "kind": "artifact-diff",
-        "path": "payload/variant-injection.patch",
-        "source": "git diff parent..injection in /home/ubuntu/releases/selfcheck-cycle/arm-v1",
-        "sha256": "d" * 64, "bytes": 4,
-    }
-    member_arm_run = {
-        "id": "arm-run", "kind": "artifact-diff", "path": "payload/arm-run.patch",
-        "source": "git diff injection..head in /home/ubuntu/releases/selfcheck-cycle/arm-v1",
-        "sha256": "e" * 64, "bytes": 5,
-    }
-    member_transcript = {
-        "id": "transcript-01", "kind": "transcript", "path": "payload/transcript-01.jsonl",
-        "source": "/home/ubuntu/releases/selfcheck-cycle/cfg-v1/x.jsonl", "sha256": "f" * 64, "bytes": 6,
-    }
-    member_fallback = {
-        "id": "zzz-other", "kind": "transcript", "path": "payload/zzz-other.jsonl",
-        "source": "/home/ubuntu/releases/selfcheck-cycle/cfg-v1/y.jsonl", "sha256": "1" * 64, "bytes": 7,
-    }
-    order1 = sorted(
-        [
-            member_transcript, member_decl, member_arm_run, member_workload,
-            member_fallback, member_measurement, member_variant,
-        ],
-        key=lambda m: member_sort_key(m["id"]),
-    )
-    order2 = sorted(
-        [
-            member_workload, member_transcript, member_measurement, member_decl,
-            member_variant, member_fallback, member_arm_run,
-        ],
-        key=lambda m: member_sort_key(m["id"]),
-    )
-    assert order1 == order2
-    assert [m["id"] for m in order1] == [
-        "declaration", "workload", "measurement", "variant-injection", "arm-run",
-        "transcript-01", "zzz-other",
-    ]
-
-    sample_manifest = {
-        "schemaVersion": 1,
-        "kind": "frozen-input",
-        "cycle": "selfcheck-cycle",
-        "experiment": "selfcheck-experiment",
-        "arm": "arm-selfcheck",
-        "armRole": "control",
-        "variant": "v1",
-        "variantTree": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "subject": "claude-code",
-        "subjectVersion": "9.9.9 (selfcheck)",
-        "declarationSha256": "a" * 64,
-        "workloadSha256": "b" * 64,
-        "measurementSha256": "c" * 64,
-        "commitRange": {
-            "base": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "injection": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            "head": "cccccccccccccccccccccccccccccccccccccccc",
-            "commits": [
-                {"commit": "cccccccccccccccccccccccccccccccccccccccc", "authorTime": "2026-01-01T00:00:00+00:00"}
-            ],
-        },
-        "sessions": [],
-        "members": [m for m in order1 if m["id"] != "zzz-other"],
-    }
-    validate_against_schema(sample_manifest, "frozen-input.schema.json", "selfcheck frozen manifest")
-
-    hash1 = content_hash(dict(sample_manifest, members=sample_manifest["members"]))
-    hash2 = content_hash(dict(
-        sample_manifest,
-        members=sorted(
-            [m for m in order2 if m["id"] != "zzz-other"],
-            key=lambda m: member_sort_key(m["id"]),
-        ),
-    ))
-    assert hash1 == hash2, "member 順序が同じ内容で hash が変わった"
-    tampered_member = dict(member_decl, sha256="2" * 64)
-    tampered_members = sorted(
-        [
-            tampered_member, member_workload, member_measurement, member_variant,
-            member_arm_run, member_transcript,
-        ],
-        key=lambda m: member_sort_key(m["id"]),
-    )
-    hash3 = content_hash(dict(sample_manifest, members=tampered_members))
-    assert hash3 != hash1, "member の sha256 を変えても hash が同じだった"
-
-    assert _expect_system_exit(_reject_identity_leak, {"p": "C:\\foo\\bar"}, "selfcheck")
-    assert _expect_system_exit(
-        _reject_identity_leak, {"p": "\\\\wsl$\\Ubuntu\\home\\x"}, "selfcheck"
-    )
-    assert _expect_system_exit(
-        _reject_identity_leak, {"p": "\\\\WSL$\\Ubuntu\\home\\x"}, "selfcheck"
-    ), "大文字小文字を無視した \\\\wsl$ 検出が効いていない"
-    assert _expect_system_exit(
-        _reject_identity_leak, {"p": "/mnt/c/Users/x/work"}, "selfcheck"
-    ), "/mnt/c/... 形の検出が効いていない"
-    assert _expect_system_exit(
-        _reject_identity_leak, {"C:\\foo\\bar": "value"}, "selfcheck"
-    ), "dict のキーが検出対象になっていない"
-    _reject_identity_leak({"p": "/home/ubuntu/releases/selfcheck-cycle/arm-v1"}, "selfcheck")
-
-    assert _expect_system_exit(
-        _reject_forbidden_keys, {"a": {"b": [{"c": {"verdict": "pass"}}]}}, "selfcheck"
-    )
-    assert _expect_system_exit(
-        _reject_forbidden_keys, {"a": [1, {"promote": True}]}, "selfcheck"
-    )
-    _reject_forbidden_keys({"a": {"b": "c"}}, "selfcheck")
-
-    sample_components = {"model": "selfcheck-model", "promptSha256": "e" * 64, "protocol": "blind-bundle-read-v1"}
-    assert estimator_identity(sample_components) == estimator_identity(dict(sample_components))
-    bad_estimator = {"schemaVersion": 1, "kind": "estimator", "id": "selfcheck-estimator", "components": {}}
-    assert _expect_system_exit(
-        validate_against_schema, bad_estimator, "estimator.schema.json", "selfcheck estimator"
-    )
-
-    def crit(number, result):
-        return {"criterion": number, "text": "criterion %d" % number, "result": result, "evidence": "e"}
-
-    control_arm = {"role": "control", "criteria": [crit(1, "met"), crit(2, "met"), crit(3, "met")]}
-    treatment_same = {"role": "treatment", "criteria": [crit(1, "met"), crit(2, "met"), crit(3, "met")]}
-    treatment_diff = {
-        "role": "treatment", "criteria": [crit(1, "met"), crit(2, "not-met"), crit(3, "met")]
-    }
-    treatment_unknown = {
-        "role": "treatment", "criteria": [crit(1, "met"), crit(2, "unknown"), crit(3, "met")]
-    }
-
-    ground_truth_same = derive_ground_truth({"cycle": "c", "arms": [control_arm, treatment_same]})
-    assert ground_truth_same["attributable"] == "not-attributable", ground_truth_same
-    assert ground_truth_same["differingCriteria"] == [], ground_truth_same
-
-    ground_truth_diff = derive_ground_truth({"cycle": "c", "arms": [control_arm, treatment_diff]})
-    assert ground_truth_diff["attributable"] == "attributable", ground_truth_diff
-    assert ground_truth_diff["differingCriteria"] == [2], ground_truth_diff
-
-    assert _expect_system_exit(
-        derive_ground_truth, {"cycle": "c", "arms": [control_arm, treatment_unknown]}
-    )
-
-    gt = {"attributable": "not-attributable"}
-    assert agreement_of({"attributable": "not-attributable"}, gt) == "match"
-    assert agreement_of({"attributable": "attributable"}, gt) == "mismatch"
-    assert agreement_of({"attributable": "indeterminate"}, gt) == "indeterminate"
-
-    sample_estimation_record = {
-        "schemaVersion": 1,
-        "kind": "estimation-record",
-        "cycle": sample_manifest["cycle"],
-        "experiment": sample_manifest["experiment"],
-        "estimations": [
-            {
-                "estimatedAt": "2026-08-19T00:00:00+09:00",
-                "use": "triage",
-                "estimator": {
-                    "id": "selfcheck-estimator",
-                    "identity": estimator_identity(sample_components),
-                    "components": sample_components,
-                },
-                "frozenInput": {
-                    "hash": content_hash(sample_manifest),
-                    "arm": sample_manifest["arm"],
-                    "manifest": sample_manifest,
-                },
-                "calibrations": [
-                    {
-                        "cycle": "selfcheck-calibration-cycle", "arm": "arm-selfcheck",
-                        "frozenInputHash": "e" * 64, "calibrationHash": "f" * 64, "agreement": "match",
-                    }
-                ],
-                "estimate": {
-                    "attributable": "not-attributable",
-                    "confidence": "medium",
-                    "basis": [{"memberId": "declaration", "locator": "manifest", "note": "n"}],
-                    "rejectedInterpretations": [
-                        {"interpretation": "attributable", "reason": "selfcheck dummy rejection"}
-                    ],
-                },
-            }
-        ],
-    }
-    validate_estimation_record(sample_estimation_record)
-    bad_estimation_record = json.loads(json.dumps(sample_estimation_record))
-    bad_estimation_record["estimations"][0]["verdict"] = "pass"
-    assert _expect_system_exit(validate_estimation_record, bad_estimation_record)
-
-    calibration_ground_truth = {
-        "attributable": "not-attributable", "comparedCriteria": [2, 3], "differingCriteria": [],
-        "derivation": "criteria>=2 identical across control and treatment",
-    }
-    calibration_estimate = {
-        "attributable": "not-attributable", "confidence": "medium",
-        "basis": [{"memberId": "workload", "locator": "x"}],
-        "rejectedInterpretations": [
-            {"interpretation": "attributable", "reason": "selfcheck dummy rejection"}
-        ],
-    }
-    calibration_entry_wo_meta = {
-        "estimator": {
-            "id": "selfcheck-estimator",
-            "identity": estimator_identity(sample_components),
-            "components": sample_components,
-        },
-        "source": {
-            "cycle": sample_manifest["cycle"], "arm": sample_manifest["arm"],
-            "recordPath": "reviews/selfcheck-cycle.json", "recordSha256": "a" * 64,
-        },
-        "frozenInput": {"hash": content_hash(sample_manifest), "manifest": sample_manifest},
-        "estimate": calibration_estimate,
-        "groundTruth": calibration_ground_truth,
-        "agreement": "match",
-    }
-    calibration_entry = dict(calibration_entry_wo_meta)
-    calibration_entry["calibratedAt"] = "2026-08-19T00:00:00+09:00"
-    calibration_entry["calibrationHash"] = content_hash(calibration_entry_wo_meta)
-    sample_calibration_record = {
-        "schemaVersion": 1,
-        "kind": "calibration-record",
-        "estimator": {"id": "selfcheck-estimator"},
-        "calibrations": [calibration_entry],
-    }
-    validate_calibration_record(sample_calibration_record)
-    bad_calibration_record = json.loads(json.dumps(sample_calibration_record))
-    bad_calibration_record["calibrations"][0]["approved"] = True
-    assert _expect_system_exit(validate_calibration_record, bad_calibration_record)
-
-    # ---- estimate 拒否 3b / 4 と artifacts 照合（TEMP のみ、実資産に触れない）----
-    old_dirs = (FROZEN_DIR, ESTIMATORS_DIR, CALIBRATIONS_DIR, CONTROL_DIR)
-    try:
-        with tempfile.TemporaryDirectory(prefix="cycle-selfcheck-est-") as sc_root:
-            CONTROL_DIR = sc_root
-            FROZEN_DIR = os.path.join(sc_root, "frozen")
-            ESTIMATORS_DIR = os.path.join(sc_root, "estimators")
-            CALIBRATIONS_DIR = os.path.join(sc_root, "calibrations")
-            os.makedirs(FROZEN_DIR)
-            os.makedirs(ESTIMATORS_DIR)
-            os.makedirs(CALIBRATIONS_DIR)
-            os.makedirs(os.path.join(sc_root, "reviews"))
-            os.makedirs(os.path.join(sc_root, "estimations"))
-
-            gate_estimator_id = "selfcheck-gate-estimator"
-            gate_components = {
-                "model": "selfcheck-model",
-                "promptSha256": "3" * 64,
-                "protocol": "blind-bundle-read-v1",
-            }
-            gate_identity = estimator_identity(gate_components)
-            with open(
-                os.path.join(ESTIMATORS_DIR, "%s.json" % gate_estimator_id),
-                "w",
-                encoding="utf-8",
-            ) as handle:
-                json.dump(
-                    {
-                        "schemaVersion": 1,
-                        "kind": "estimator",
-                        "id": gate_estimator_id,
-                        "components": gate_components,
-                    },
-                    handle,
-                )
-
-            def _write_gate_bundle(include_measurement):
-                decl_bytes = b'{"cycle":"selfcheck-gate-cycle"}'
-                workload_bytes = b"workload"
-                measurement_bytes = b"measurement"
-                members = [
-                    {
-                        "id": "declaration",
-                        "kind": "declaration",
-                        "path": "payload/declaration.json",
-                        "source": "apparatus/cycles/selfcheck-gate-cycle.json",
-                        "sha256": hashlib.sha256(decl_bytes).hexdigest(),
-                        "bytes": len(decl_bytes),
-                    },
-                    {
-                        "id": "workload",
-                        "kind": "workload",
-                        "path": "payload/workload.md",
-                        "source": "agent-rules/experiments/selfcheck-experiment/workload.md",
-                        "sha256": hashlib.sha256(workload_bytes).hexdigest(),
-                        "bytes": len(workload_bytes),
-                    },
-                ]
-                payload_map = {
-                    "payload/declaration.json": decl_bytes,
-                    "payload/workload.md": workload_bytes,
-                }
-                manifest = {
-                    "schemaVersion": 1,
-                    "kind": "frozen-input",
-                    "cycle": "selfcheck-gate-cycle",
-                    "experiment": "selfcheck-experiment",
-                    "arm": "arm-selfcheck",
-                    "armRole": "control",
-                    "variant": "v1",
-                    "variantTree": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "subject": "claude-code",
-                    "subjectVersion": "9.9.9 (selfcheck)",
-                    "declarationSha256": hashlib.sha256(decl_bytes).hexdigest(),
-                    "workloadSha256": hashlib.sha256(workload_bytes).hexdigest(),
-                    "commitRange": {
-                        "base": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                        "injection": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                        "head": "cccccccccccccccccccccccccccccccccccccccc",
-                        "commits": [],
-                    },
-                    "sessions": [],
-                    "members": members,
-                }
-                if include_measurement:
-                    members.append({
-                        "id": "measurement",
-                        "kind": "measurement",
-                        "path": "payload/measurement.md",
-                        "source": "agent-rules/experiments/selfcheck-experiment/MEASUREMENT.md",
-                        "sha256": hashlib.sha256(measurement_bytes).hexdigest(),
-                        "bytes": len(measurement_bytes),
-                    })
-                    payload_map["payload/measurement.md"] = measurement_bytes
-                    manifest["measurementSha256"] = hashlib.sha256(
-                        measurement_bytes
-                    ).hexdigest()
-                    members.sort(key=lambda m: member_sort_key(m["id"]))
-                frozen_hash = content_hash(manifest)
-                bundle_dir = os.path.join(FROZEN_DIR, frozen_hash)
-                os.makedirs(os.path.join(bundle_dir, "payload"), exist_ok=True)
-                with open(
-                    os.path.join(bundle_dir, "manifest.json"), "w", encoding="utf-8"
-                ) as handle:
-                    json.dump(manifest, handle, ensure_ascii=False, indent=2)
-                    handle.write("\n")
-                for rel, content in payload_map.items():
-                    with open(
-                        os.path.join(bundle_dir, *rel.split("/")), "wb"
-                    ) as handle:
-                        handle.write(content)
-                return frozen_hash, manifest
-
-            hash_no_measurement, _ = _write_gate_bundle(False)
-            missing_input = os.path.join(sc_root, "does-not-exist.json")
-            try:
-                estimate(hash_no_measurement, gate_estimator_id, missing_input)
-                raise AssertionError("estimate without measurement member should exit")
-            except SystemExit as exc:
-                assert "measurement" in str(exc), exc
-
-            hash_with_measurement, gate_manifest = _write_gate_bundle(True)
-            mismatch_entry_wo_meta = {
-                "estimator": {
-                    "id": gate_estimator_id,
-                    "identity": gate_identity,
-                    "components": gate_components,
-                },
-                "source": {
-                    "cycle": gate_manifest["cycle"],
-                    "arm": gate_manifest["arm"],
-                    "recordPath": "reviews/selfcheck-gate-cycle.json",
-                    "recordSha256": "a" * 64,
-                },
-                "frozenInput": {
-                    "hash": hash_with_measurement,
-                    "manifest": gate_manifest,
-                },
-                "estimate": {
-                    "attributable": "attributable",
-                    "confidence": "low",
-                    "basis": [{"memberId": "measurement", "locator": "selfcheck"}],
-                    "rejectedInterpretations": [
-                        {"interpretation": "not-attributable", "reason": "selfcheck"}
-                    ],
-                },
-                "groundTruth": {
-                    "attributable": "not-attributable",
-                    "comparedCriteria": [2],
-                    "differingCriteria": [],
-                    "derivation": "selfcheck mismatch fixture",
-                },
-                "agreement": "mismatch",
-            }
-            mismatch_entry = dict(mismatch_entry_wo_meta)
-            mismatch_entry["calibratedAt"] = "2026-08-19T00:00:00+09:00"
-            mismatch_entry["calibrationHash"] = content_hash(mismatch_entry_wo_meta)
-            with open(
-                os.path.join(CALIBRATIONS_DIR, "%s.json" % gate_estimator_id),
-                "w",
-                encoding="utf-8",
-            ) as handle:
-                json.dump(
-                    {
-                        "schemaVersion": 1,
-                        "kind": "calibration-record",
-                        "estimator": {"id": gate_estimator_id},
-                        "calibrations": [mismatch_entry],
-                    },
-                    handle,
-                )
-            try:
-                estimate(hash_with_measurement, gate_estimator_id, missing_input)
-                raise AssertionError("estimate with mismatch calibration should exit")
-            except SystemExit as exc:
-                assert "mismatch" in str(exc), exc
-
-            artifact_bytes = b"selfcheck-artifact-body"
-            artifact_name = "selfcheck-prompt.txt"
-            artifact_sha = hashlib.sha256(artifact_bytes).hexdigest()
-            with open(os.path.join(ESTIMATORS_DIR, artifact_name), "wb") as handle:
-                handle.write(artifact_bytes)
-            good_artifacts_desc = {
-                "schemaVersion": 1,
-                "kind": "estimator",
-                "id": "unused",
-                "components": {"promptSha256": artifact_sha, "model": "x"},
-                "artifacts": {"promptSha256": artifact_name},
-            }
-            _verify_estimator_artifacts(good_artifacts_desc, ESTIMATORS_DIR)
-            missing_artifacts_desc = dict(good_artifacts_desc)
-            missing_artifacts_desc["artifacts"] = {"promptSha256": "missing-file.txt"}
-            assert _expect_system_exit(
-                _verify_estimator_artifacts, missing_artifacts_desc, ESTIMATORS_DIR
-            )
-            bad_hash_desc = dict(good_artifacts_desc)
-            bad_hash_desc["components"] = {
-                "promptSha256": "0" * 64,
-                "model": "x",
-            }
-            assert _expect_system_exit(
-                _verify_estimator_artifacts, bad_hash_desc, ESTIMATORS_DIR
-            )
-            slash_desc = dict(good_artifacts_desc)
-            slash_desc["artifacts"] = {"promptSha256": "../escape.txt"}
-            assert _expect_system_exit(
-                _verify_estimator_artifacts, slash_desc, ESTIMATORS_DIR
-            )
-            dotdot_desc = dict(good_artifacts_desc)
-            dotdot_desc["artifacts"] = {"promptSha256": ".."}
-            assert _expect_system_exit(
-                _verify_estimator_artifacts, dotdot_desc, ESTIMATORS_DIR
-            )
-    finally:
-        FROZEN_DIR, ESTIMATORS_DIR, CALIBRATIONS_DIR, CONTROL_DIR = old_dirs
-
+    wrong_arm = dict(fact, cwd="/tmp/other")
+    assert collect_execution_mismatches(arm, [wrong_arm], [])
+    unclassified = dict(fact, cwd=None)
+    assert collect_execution_mismatches(arm, [unclassified], [])
+    print("selfcheck: ok")
     return 0
 
 
@@ -3633,15 +3121,23 @@ def main():
     calibrate_mode.add_argument("--prepare", action="store_true")
     calibrate_mode.add_argument("--input")
     calibrate_parser.add_argument("--replace", action="store_true")
+    promote_parser = sub.add_parser("promote")
+    promote_parser.add_argument("--cycle", required=True)
+    rollback_parser = sub.add_parser("rollback")
+    rollback_parser.add_argument("--cycle", required=True)
     args = parser.parse_args()
 
-    configure_environment(args.environment)
     if args.selfcheck:
         if args.command is not None:
             parser.error("--selfcheck cannot be combined with a subcommand")
-        return selfcheck(check_active_environment=args.environment is not None)
+        if args.environment:
+            configure_environment(args.environment)
+        return core_selfcheck(check_active_environment=args.environment is not None)
     if args.command is None:
         parser.error("a subcommand is required unless --selfcheck is used")
+    if not args.environment:
+        parser.error("--environment is required for commands")
+    configure_environment(args.environment)
 
     if args.command == "materialize":
         materialize(args.cycle)
@@ -3663,6 +3159,10 @@ def main():
             args.cycle, args.arm, args.estimator,
             prepare=args.prepare, input_path=args.input, replace=args.replace,
         )
+    elif args.command == "promote":
+        promote(args.cycle)
+    elif args.command == "rollback":
+        rollback(args.cycle)
 
 
 if __name__ == "__main__":

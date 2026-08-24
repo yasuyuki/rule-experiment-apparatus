@@ -1,28 +1,45 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/apparatus/environment.schema.json",
-  "title": "Apparatus environment descriptor",
-  "description": "アーム実体化先の環境。実値はリポジトリ外（private-control/apparatus-environment.json）。このスキーマは形だけを縛る。",
-  "oneOf": [
-    {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["host", "distro", "user"],
+  "title": "Rule experiment environment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["executor", "variantSourceRoot", "stableRules", "subjects"],
+  "properties": {
+    "executor": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "distro", "user"],
+          "properties": {
+            "kind": { "const": "wsl" },
+            "distro": { "type": "string", "minLength": 1 },
+            "user": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "local-posix" } }
+        }
+      ]
+    },
+    "variantSourceRoot": { "type": "string", "minLength": 1 },
+    "stableRules": {
+      "type": "object", "additionalProperties": false,
+      "required": ["root", "branch"],
       "properties": {
-        "host": { "const": "unix" },
-        "distro": { "type": "string", "minLength": 1 },
-        "user": { "type": "string", "minLength": 1 },
-        "agentRulesRoot": { "type": "string", "minLength": 1 }
+        "root": { "type": "string", "minLength": 1 },
+        "branch": { "type": "string", "minLength": 1 }
       }
     },
-    {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["host"],
-      "properties": {
-        "host": { "const": "windows" },
-        "agentRulesRoot": { "type": "string", "minLength": 1 }
+    "subjects": {
+      "type": "object", "minProperties": 1,
+      "additionalProperties": {
+        "type": "object", "additionalProperties": false,
+        "required": ["configTemplate"],
+        "properties": { "configTemplate": { "type": "string", "minLength": 1 } }
       }
     }
-  ]
+  }
 }

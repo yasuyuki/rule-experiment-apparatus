@@ -10,7 +10,7 @@
 
 ## 1. アームの実体
 
-アームは**この装置リポジトリの clone 単体**である。`apparatus/cycle.py` の
+アームは宣言した workload repository の clone 単体である。`apparatus/cycle.py` の
 `materialize` が作る構造は次のとおり。
 
 ```text
@@ -18,9 +18,7 @@
 <release>/<armId>     base からの clone（アーム1つにつき1つ）
 ```
 
-`base.repo` は装置親ディレクトリの basename と一致しなければ `materialize` が拒否する
-（`apparatus/cycle.py` の `resolve_materialize_base`）。**別リポジトリをアームに
-することはできない。**
+`base.repo` は environment descriptor からの相対パスまたは絶対パスで指定する。
 
 変種の常時適用ファイルはアーム内へ注入され、`git add -A -f` で commit される。
 **注入されたファイルは測定対象の変種で
@@ -38,7 +36,6 @@ public source は通常の `.gitignore` を使い、local declaration、runtime 
 | `apparatus/schemas/*.json`, `apparatus/subjects/*.json` | 追跡される |
 | `apparatus/cycles/*.json` | operator-local input。ignore され、commit しない |
 | `CONSTITUTION.md`, `TERMS.md`, `README.md` | 追跡される |
-| `wrapper/` 配下 | 追跡されるが**着手対象外**（§3） |
 
 新しい source path を追加するときは `.gitignore` と repository boundary test の両方で
 公開対象か local data かを明示する。
@@ -47,9 +44,8 @@ public source は通常の `.gitignore` を使い、local declaration、runtime 
 
 次を必要とする作業は、そのサイクルの受け入れ条件に含めない。
 
-- **`wrapper/` 配下の改修** — 着手しない
-- **`agent-rules` リポジトリ** — アームの外。workspace に存在しない
-- **`private-control` リポジトリとライブ release** — アームの外
+- **variant source repository** — アームの外
+- **`foundation-control` リポジトリと runtime worktree** — アームの外
 - **実機でのツール起動確認**（実際に codex / cursor-agent を立ち上げて見る類）—
   アームの外。成果物を本体へ戻したあとに別途行い、**サイクルの合否には含めない**
 - **scratch plan** — 追跡対象外。ここへ書いた判断は次のセッションから読めない
@@ -66,7 +62,5 @@ public source は通常の `.gitignore` を使い、local declaration、runtime 
 
 ## 5. 計測との接続
 
-装置の `judge` は参加セッションがちょうど1件のアームだけを受け付ける。複数セッションに
-分かれる見込みの workload は、計測ではなく推定の候補になりうる。**推定設計そのものは
-この文書の範囲外**で、[`RULE-EXPERIMENT.md`](RULE-EXPERIMENT.md) §7 が持つ。
-この文書は適格性の先フィルタだけを持つ。
+装置の `judge` は複数 subject・複数 session を execution manifest で受け付ける。
+集約方法は実験固有 judge が決める。この文書は適格性の先フィルタだけを持つ。

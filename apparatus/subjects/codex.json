@@ -1,29 +1,15 @@
 {
   "id": "codex",
+  "tool": "codex",
   "isolationEnv": "CODEX_HOME",
-  "isolationComplete": true,
   "versionCommand": "codex --version",
   "binary": "codex",
-  "configRoot": {
-    "alwaysApplyFile": "AGENTS.md",
-    "emptyRulesDir": null,
-    "credentialDest": "auth.json",
-    "credentialSource": null
-  },
+  "markerFile": "AGENTS.md",
+  "identityPaths": ["auth.json"],
   "workspacePlacement": [
     { "path": "AGENTS.md", "proven": true }
   ],
-  "configRootPlacement": [
-    { "path": "AGENTS.md", "proven": true }
-  ],
-  "keepEmpty": ["AGENTS.md"],
-  "provisioning": {
-    "globalAndWorkspace": "marker transcript required before a live binding uses both layers",
-    "credentialConstraint": "isolated CODEX_HOME has no credential source"
-  },
-  "sharedPlacement": [
-    { "path": "AGENTS.md", "subjects": ["codex", "cursor-agent"] }
-  ],
+  "keepEmpty": [],
   "transcripts": {
     "glob": "sessions/**/rollout-*.jsonl",
     "armBinding": "session-meta-cwd",
@@ -33,6 +19,5 @@
         { "jsonlField": "payload.role", "equals": "assistant" }
       ]
     }
-  },
-  "login": "credential-file"
+  }
 }

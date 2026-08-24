@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/apparatus/estimator.schema.json",
   "title": "Estimator descriptor",
-  "description": "推定器の identity は components だけから決まる（content_hash(components)）。id と note は identity 計算に含めない。推定器の中身（LLM か統計かヒューリスティックか）は装置へ焼き込まない（憲法 不変条件 2 と同型）。置き場は装置の外（private-control/estimators/<id>.json）。",
+  "description": "推定器の identity は components だけから決まる（content_hash(components)）。id と note は identity 計算に含めない。推定器の中身（LLM か統計かヒューリスティックか）は装置へ焼き込まない（憲法 不変条件 2 と同型）。置き場は装置の外（foundation-control/estimators/<id>.json）。",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "kind", "id", "components"],

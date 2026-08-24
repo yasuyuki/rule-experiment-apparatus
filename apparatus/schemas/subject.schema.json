@@ -2,155 +2,73 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/apparatus/subject.schema.json",
   "title": "Subject descriptor",
-  "description": "1 subject 1 ファイルのデータ表。コードの拡張点ではない。null は未確認の値を表す。空文字は使わない。",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "id",
-    "isolationEnv",
-    "isolationComplete",
-    "versionCommand",
-    "binary",
-    "configRoot",
-    "workspacePlacement",
-    "configRootPlacement",
-    "keepEmpty",
-    "transcripts",
-    "login"
+    "id", "tool", "isolationEnv", "versionCommand", "binary", "markerFile",
+    "identityPaths", "workspacePlacement", "keepEmpty", "transcripts"
   ],
   "properties": {
     "id": { "$ref": "#/$defs/identifier" },
+    "tool": { "$ref": "#/$defs/identifier" },
     "isolationEnv": { "type": "string", "minLength": 1 },
-    "isolationComplete": {
-      "description": "隔離 env だけで config が完結するか。false は残余が user 単位などに残る（実測）。",
-      "type": "boolean"
+    "versionCommand": { "type": "string", "minLength": 1 },
+    "binary": { "type": "string", "minLength": 1 },
+    "markerFile": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "pattern": "^[^/]" },
+        { "type": "null" }
+      ]
     },
-    "versionCommand": { "$ref": "#/$defs/stringOrUnconfirmed" },
-    "binary": { "$ref": "#/$defs/stringOrUnconfirmed" },
-    "configRoot": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["alwaysApplyFile", "emptyRulesDir", "credentialDest", "credentialSource"],
-      "properties": {
-        "alwaysApplyFile": { "$ref": "#/$defs/stringOrUnconfirmed" },
-        "emptyRulesDir": { "$ref": "#/$defs/stringOrUnconfirmed" },
-        "credentialDest": { "$ref": "#/$defs/stringOrUnconfirmed" },
-        "credentialSource": { "$ref": "#/$defs/stringOrUnconfirmed" }
-      }
+    "identityPaths": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "pattern": "^[^/]" }
     },
     "workspacePlacement": { "$ref": "#/$defs/placementList" },
-    "configRootPlacement": {
-      "oneOf": [
-        { "$ref": "#/$defs/placementList" },
-        { "type": "null" }
-      ]
-    },
     "keepEmpty": {
-      "oneOf": [
-        {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 }
-        },
-        { "type": "null" }
-      ]
-    },
-    "provisioning": {
-      "description": "Provisioner-only facts about a subject's live binding; not cycle state.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["globalAndWorkspace", "credentialConstraint"],
-      "properties": {
-        "globalAndWorkspace": { "type": "string", "minLength": 1 },
-        "credentialConstraint": { "type": "string", "minLength": 1 }
-      }
-    },
-    "sharedPlacement": {
-      "description": "他 subject と共有され、片方だけに効かせられない配置経路。2026-08-17 marker probe の実測。",
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["path", "subjects"],
-        "properties": {
-          "path": { "type": "string", "minLength": 1 },
-          "subjects": {
-            "type": "array",
-            "items": { "$ref": "#/$defs/identifier" },
-            "minItems": 2
-          }
-        }
-      }
+      "type": "array", "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "pattern": "^[^/]" }
     },
     "transcripts": {
       "oneOf": [
         {
-          "type": "object",
-          "additionalProperties": false,
+          "type": "object", "additionalProperties": false,
           "required": ["glob", "armBinding", "participation"],
           "properties": {
             "glob": { "type": "string", "minLength": 1 },
             "searchRoot": { "enum": ["config-root", "home-cursor"] },
-            "armBinding": {
-              "oneOf": [
-                { "enum": ["project-slug", "session-meta-cwd", "cursor-project-slug"] },
-                { "type": "null" }
-              ]
-            },
+            "armBinding": { "enum": ["project-slug", "session-meta-cwd", "cursor-project-slug"] },
             "participation": {
               "oneOf": [
-                { "$ref": "#/$defs/transcriptParticipationPredicate" },
+                { "$ref": "#/$defs/predicate" },
                 {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["all"],
+                  "type": "object", "additionalProperties": false, "required": ["all"],
                   "properties": {
-                    "all": {
-                      "type": "array",
-                      "minItems": 1,
-                      "items": { "$ref": "#/$defs/transcriptParticipationPredicate" }
-                    }
+                    "all": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/predicate" } }
                   }
-                },
-                { "type": "null" }
+                }
               ]
             }
           }
         },
         { "type": "null" }
       ]
-    },
-    "login": {
-      "enum": ["credential-file", "browser"]
     }
   },
   "$defs": {
-    "identifier": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9._-]+$",
-      "not": { "enum": [".", ".."] }
-    },
-    "stringOrUnconfirmed": {
-      "oneOf": [
-        { "type": "string", "minLength": 1 },
-        { "type": "null" }
-      ]
-    },
+    "identifier": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "not": { "enum": [".", ".."] } },
     "placementList": {
-      "type": "array",
+      "type": "array", "minItems": 1,
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["path", "proven"],
+        "type": "object", "additionalProperties": false, "required": ["path", "proven"],
         "properties": {
           "path": { "type": "string", "minLength": 1 },
           "proven": { "type": "boolean" }
         }
       }
     },
-    "transcriptParticipationPredicate": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["jsonlField", "equals"],
+    "predicate": {
+      "type": "object", "additionalProperties": false, "required": ["jsonlField", "equals"],
       "properties": {
         "jsonlField": { "type": "string", "minLength": 1 },
         "equals": { "type": "string", "minLength": 1 }
