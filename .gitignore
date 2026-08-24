@@ -10,12 +10,6 @@ apparatus/cycles/
 .claude/plan-phases/
 docs/incidents/
 node_modules/
-wrapper/config/environment.json
-wrapper/config/environment.local.json
-wrapper/config/release-state.json
-wrapper/config/*.lock
-wrapper/config/*.tmp
-wrapper/config/*.bak
 runtime/
 state/
 transcripts/
