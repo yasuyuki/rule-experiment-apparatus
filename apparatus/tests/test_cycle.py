@@ -109,11 +109,15 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
     write(experiment / "session-contract.md", "[%s:%s]\n")
     write(experiment / "judge" / "judge.py", JUDGE)
     placement = {"tools": {"demo": {"path": ".rules/{id}.txt"}}, "mustStayEmpty": ["UNUSED.md"]}
-    for variant, body in (("v1", "old\n"), ("v2", "new\n")):
+    for variant, body in (("v1", "old\n"), ("v2", "new\n"), ("vbad", "bad\n")):
         variant_root = experiment / "variants" / variant / "source"
         write(variant_root / "bin" / "rules.py", RENDERER)
         write(variant_root / "placement.json", json.dumps(placement))
         write(variant_root / "rules" / "demo.rule.md", body)
+    write(
+        experiment / "variants" / "vbad" / "source" / "bin" / "rules.py",
+        "raise SystemExit('renderer failure')\n",
+    )
     run("git", "add", ".", cwd=source)
     run("git", "commit", "-m", "variants", cwd=source)
 
@@ -156,7 +160,7 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         variant: subprocess.check_output(
             ["git", "rev-parse", f"HEAD:experiments/demo/variants/{variant}/source"],
             cwd=source, text=True,
-        ).strip() for variant in ("v1", "v2")
+        ).strip() for variant in ("v1", "v2", "vbad")
     }
     declaration = {
         "cycle": "fixture-core", "experiment": "demo", "kind": "measurement",
@@ -252,6 +256,95 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         )
         assert_schema_contract(rollback, "rollback.schema.json")
         assert (stable / "rules" / "demo.rule.md").read_text(encoding="utf-8") == "stable\n"
+
+        def promotion_inputs(name, result_control="not-met", result_treatment="met",
+                             variant="v2", tree=None):
+            selected_tree = tree or trees[variant]
+            candidate = json.loads(json.dumps(declaration))
+            candidate["cycle"] = name
+            candidate["arms"][1]["variant"] = variant
+            candidate["arms"][1]["variantTree"] = selected_tree
+            write(cycles / (name + ".json"), json.dumps(candidate))
+            review = {
+                "schemaVersion": 3, "cycle": name,
+                "arms": [
+                    {"id": "control", "role": "control", "variantTree": trees["v1"],
+                     "criteria": [{"criterion": 1, "text": "effect", "result": result_control}]},
+                    {"id": "treatment", "role": "treatment", "variantTree": selected_tree,
+                     "criteria": [{"criterion": 1, "text": "effect", "result": result_treatment}]},
+                ],
+            }
+            write(control / "reviews" / (name + ".json"), json.dumps(review))
+            return candidate, review
+
+        def expect_not_promoted(name, reason, **kwargs):
+            promotion_inputs(name, **kwargs)
+            cycle.promote(name)
+            record = json.loads(
+                (control / "promotions" / (name + ".json")).read_text(encoding="utf-8")
+            )
+            assert record["status"] == "not-promoted"
+            assert any(reason in item for item in record["reasons"]), record["reasons"]
+
+        expect_not_promoted("no-effect", "no attributable effect", result_control="met")
+        expect_not_promoted(
+            "regression", "review contains regression",
+            result_control="met", result_treatment="not-met",
+        )
+        expect_not_promoted("unknown", "unknown", result_treatment="unknown")
+        write(stable / "dirty.tmp", "dirty\n")
+        expect_not_promoted("dirty-stable", "dirty")
+        (stable / "dirty.tmp").unlink()
+        expect_not_promoted("tree-drift", "variantTree", tree="f" * 40)
+        expect_not_promoted("test-failure", "renderer failure", variant="vbad")
+
+        prepared_decl, _review = promotion_inputs("prepared-resume")
+        prepared_source = experiment / "variants" / "v2" / "source"
+        old_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=stable, text=True
+        ).strip()
+        old_digest = cycle.managed_digest(str(stable))
+        target_digest = cycle.managed_digest(str(prepared_source))
+        prepared_worktree = temp / "prepared-worktree"
+        run("git", "worktree", "add", "--detach", str(prepared_worktree), old_head, cwd=stable)
+        cycle.sync_managed(str(prepared_source), str(prepared_worktree))
+        run("git", "add", "--", *cycle.MANAGED_ITEMS, cwd=prepared_worktree)
+        run("git", "commit", "-m", "prepared fixture", cwd=prepared_worktree)
+        prepared_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=prepared_worktree, text=True
+        ).strip()
+        run("git", "worktree", "remove", "--force", str(prepared_worktree), cwd=stable)
+        review_file = control / "reviews" / "prepared-resume.json"
+        prepared_record = {
+            "schemaVersion": 1, "cycle": "prepared-resume",
+            "recordedAt": datetime.datetime.now().astimezone().isoformat(),
+            "status": "prepared", "reviewSha256": sha(review_file),
+            "variantTree": prepared_decl["arms"][1]["variantTree"],
+            "oldManagedDigest": old_digest, "managedDigest": target_digest,
+            "oldStableCommit": old_head, "newStableCommit": prepared_head, "reasons": [],
+        }
+        write(
+            control / "promotions" / "prepared-resume.json",
+            json.dumps(prepared_record),
+        )
+        cycle.promote("prepared-resume")
+        resumed = json.loads(
+            (control / "promotions" / "prepared-resume.json").read_text(encoding="utf-8")
+        )
+        assert resumed["status"] == "promoted"
+        assert subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=stable, text=True
+        ).strip() == prepared_head
+
+        write(stable / "later.txt", "later\n")
+        run("git", "add", "later.txt", cwd=stable)
+        run("git", "commit", "-m", "later fixture", cwd=stable)
+        try:
+            cycle.rollback("prepared-resume")
+        except SystemExit as exc:
+            assert "not the recorded promotion commit" in str(exc)
+        else:
+            raise AssertionError("rollback accepted a later stable commit")
     finally:
         cycle.CYCLES_DIR, cycle.SUBJECTS_DIR = old
         if release.exists():
