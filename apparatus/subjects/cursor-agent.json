@@ -5,7 +5,7 @@
   "versionCommand": "cursor-agent --version",
   "binary": "cursor-agent",
   "markerFile": null,
-  "credentialPaths": ["auth.json"],
+  "credentialPaths": ["cursor/auth.json"],
   "workspacePlacement": [
     { "path": ".cursor/rules/*.mdc", "proven": true }
   ],

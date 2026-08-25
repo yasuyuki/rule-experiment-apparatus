@@ -28,6 +28,15 @@ missing that file starts every session at the login screen regardless of credent
 it reachable at `<configTemplate>/.claude.json` (for example, a symlink to the real `$HOME/.claude.json`)
 before pointing `configTemplate` there.
 
+Verified for cursor-agent 2026-08-25: `isolationEnv` for this subject is `XDG_CONFIG_HOME`, but the CLI
+reads its config from `$XDG_CONFIG_HOME/cursor/...`, not from `$XDG_CONFIG_HOME` directly. The config root
+`cycle.py` builds is a flat directory (no `cursor/` prefix), so `credentialPaths` must include that prefix
+(`cursor/auth.json`, not `auth.json`) and `configTemplate`/`credentialStore` must be set accordingly
+(`credentialStore` pointed at the parent of the real `~/.config/cursor`, not at that directory itself, so
+the store path plus the `credentialPaths` entry lands on the real credential file). A flat `credentialPaths`
+entry silently resolves to a path cursor-agent never reads, which reports "Not logged in" despite a valid
+symlinked credential.
+
 Do not commit credentials or config templates to this public repository. Verify setup with:
 
 ```console
