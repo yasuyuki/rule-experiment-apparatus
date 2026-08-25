@@ -17,6 +17,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -r apparatus/requirements.txt
+      - run: |
+          git config --global user.name Fixture
+          git config --global user.email fixture@example.invalid
       - run: python apparatus/docs_check.py
       - run: python apparatus/cycle.py --environment apparatus/schemas/environment.example.json --selfcheck
       - run: python apparatus/tests/test_cycle.py
