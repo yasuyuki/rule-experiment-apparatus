@@ -284,7 +284,7 @@ identity に何を含めるか、handoff が具体的に何を照合するかは
 ## 5. 機能追加の適合判定
 
 改善・削減・機能追加の判定は [`docs/IMPROVEMENT-POLICY.md`](docs/IMPROVEMENT-POLICY.md)
-を唯一の正本とする。具体的な未着手欠陥は repository root の `ISSUES.md` に置く。
+を唯一の正本とする。具体的な未着手欠陥は運用側の `ISSUES.md` に置き、この repository には置かない。
 
 ---
 

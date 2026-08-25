@@ -29,8 +29,6 @@ Normal commands require `--environment <private-environment.json>`.
 | [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) | Operator workflow |
 | [`docs/templates/measurement-brief.md`](docs/templates/measurement-brief.md) | Measurement brief template |
 | [`apparatus/README.md`](apparatus/README.md) | Schemas and implementation boundary |
-| [`HANDOFF.md`](HANDOFF.md) | Current machine-local project state |
-| [`ISSUES.md`](ISSUES.md) | Deferred concrete defects |
 
 ### Historical
 
