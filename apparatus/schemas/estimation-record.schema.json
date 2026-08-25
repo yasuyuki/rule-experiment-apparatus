@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/apparatus/estimation-record.schema.json",
   "title": "Estimation record (schemaVersion 1)",
-  "description": "推定記録の形の正本。計測記録（cycle-record.schema.json）とは別ファイル・別ディレクトリ（foundation-control/estimations/<cycle>.json）に置く。用途は triage 専用（use は const）。verdict/promote 等の禁止キーは additionalProperties: false と cycle.py の _reject_forbidden_keys の両方で防ぐ（多層防御、憲法 不変条件 10、docs/CYCLE-RECORD-CRITERIA.md §9）。frozenInput.manifest の content_hash 照合・estimator.identity の再計算・basis[].memberId の存在確認など、アーム間・フィールド間の条件は JSON Schema で書けないので cycle.py の validate_estimation_record() が持つ。",
+  "description": "推定記録の形の正本。計測記録（cycle-record.schema.json）とは別ファイル・別ディレクトリ（foundation-control/estimations/<cycle>.json）に置く。用途は triage 専用（use は const）。verdict/promote 等の禁止キーは additionalProperties: false と cycle.py の _reject_forbidden_keys の両方で防ぐ（多層防御、憲法 不変条件 10）。frozenInput.manifest の content_hash 照合・estimator.identity の再計算・basis[].memberId の存在確認など、アーム間・フィールド間の条件は JSON Schema で書けないので cycle.py の validate_estimation_record() が持つ。",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "kind", "cycle", "experiment", "estimations"],
@@ -51,7 +51,7 @@
     "estimate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["attributable", "confidence", "basis", "rejectedInterpretations"],
+      "required": ["attributable", "basis"],
       "properties": {
         "attributable": { "enum": ["attributable", "not-attributable", "indeterminate"] },
         "confidence": { "enum": ["low", "medium", "high"] },

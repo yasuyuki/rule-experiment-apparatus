@@ -22,13 +22,8 @@ Normal commands require `--environment <private-environment.json>`.
 | [`docs/RULE-EXPERIMENT.md`](docs/RULE-EXPERIMENT.md) | Experiment protocol |
 | [`docs/EXECUTION-UNIT.md`](docs/EXECUTION-UNIT.md) | Session ownership and provenance |
 | [`docs/ARM-SCOPE.md`](docs/ARM-SCOPE.md) | Workload scope |
-| [`docs/REVIEW-CRITERIA.md`](docs/REVIEW-CRITERIA.md) | Review and promotion decision |
-| [`docs/CYCLE-RECORD-CRITERIA.md`](docs/CYCLE-RECORD-CRITERIA.md) | Cycle record contract |
-| [`docs/COMMANDS.md`](docs/COMMANDS.md) | Command reference |
 | [`docs/SETUP-GUIDE.md`](docs/SETUP-GUIDE.md) | Private setup |
 | [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) | Operator workflow |
-| [`docs/templates/measurement-brief.md`](docs/templates/measurement-brief.md) | Measurement brief template |
-| [`apparatus/README.md`](apparatus/README.md) | Schemas and implementation boundary |
 
 ### Historical
 

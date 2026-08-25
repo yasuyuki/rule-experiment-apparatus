@@ -25,7 +25,13 @@ distribution beyond the experiment is outside the core.
 Every promotable variant has `variants/<id>/source/{rules,placement.json,bin/rules.py}`. The core
 checks the declared `variantTree`, rejects dirty or drifting source, renders outside the arm, and
 copies only outputs whose subject descriptor placement is `proven:true`. Unused always-on paths
-declared by `mustStayEmpty` must be absent.
+declared by `mustStayEmpty` must be absent. `variantTree` is the Git tree of that `source/`
+directory.
+
+## Executor contract
+
+The core has two executors only: `{kind: "wsl", distro, user}` runs bash through
+`wsl.exe ... bash -lc`; `{kind: "local-posix"}` runs bash directly.
 
 ## Execution contract
 
@@ -35,6 +41,15 @@ span, and all arm commits in an execution manifest. Unclassified sessions, sessi
 different arm, missing declared subjects, and commits outside all owning session spans reject the
 cycle. There is no subject or session count limit. Experiment-specific aggregation belongs to the
 judge receiving `--execution <manifest.json>`.
+
+## Judge contract
+
+An experiment judge is a single `judge.py` with two subcommands. `baseline --arm <arm-id> -o <path>`
+runs at handoff time, before the workload, and writes a pre-run snapshot. `judge --arm <arm-path>
+--workload <path> --variant <id> --execution <manifest.json> --baseline <path>` runs at judge time,
+prints one JSON report with `judgeSha256`, `workloadSha256`, and `criteria`, and exits 0 when every
+criterion is met, 1 otherwise. Any other exit code is an infrastructure failure. The judge aggregates
+any number of subjects and sessions from the execution manifest.
 
 ## Promotion contract
 

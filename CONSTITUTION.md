@@ -57,7 +57,7 @@ baseline に反映する」ための実装である。
 | **改良再実行** | 変種だけを変えて再実行し、差分を見る |
 | **推定** | 再実行が非現実的な workload の1実行から、凍結入力に推定器を当てて変種の効果を見積もる |
 
-各操作の手順は `docs/RULE-EXPERIMENT.md` §5、推定の設計は同 §7。
+各操作の手順は `docs/RULE-EXPERIMENT.md`、推定の設計も同文書。
 
 再計測は「同一変種・同一 workload で再実行できる」ことを前提にする。workload が
 巨大で再実行が非現実的なとき、この前提が崩れる。推定はその場合の縮退操作であり、
@@ -156,7 +156,7 @@ baseline に反映する」ための実装である。
 その変更自体を別サイクルの実験対象へ分離する。判定手段がアームごとに違ってはならない。
 
 各要素を具体的にどう宣言し、宣言と実状態をどう照合するかは
-`docs/RULE-EXPERIMENT.md` §4。
+`docs/RULE-EXPERIMENT.md`。
 
 ### (2) 計測基準は内容ごとに導出する。計測手段を機構へ焼き込まない
 
@@ -196,7 +196,7 @@ marker が出ることを確認してから `proven` にする。この確認は
 あるか分からない状態は、載っていない状態と区別できない。
 
 実証の手順、subject 記述子による配置経路の保持、marker が出なかったときの扱いは
-`docs/RULE-EXPERIMENT.md` §8。
+`docs/RULE-EXPERIMENT.md`。
 
 ### (5) 変種の正本はアーム worktree の外に置く
 
@@ -205,7 +205,7 @@ marker が出ることを確認してから `proven` にする。この確認は
 **毎サイクルそこから注入する。手打ちしない。**
 正本の同一性は内容から決まる識別子で表し、注入のたびに照合する。
 
-正本の現在の置き場、同一性の表し方、照合の実装は `docs/RULE-EXPERIMENT.md` §5.1。
+正本の現在の置き場、同一性の表し方、照合の実装は `docs/RULE-EXPERIMENT.md`。
 
 ### (6) base は全アームで共有し、baseline に直接書き込ませない
 
@@ -255,7 +255,7 @@ handoff はアームの target と subject identity が宣言どおりである�
 人へ渡す境界である。これは計測結果でも特定の計測方式でもなく、比較条件の照合である。
 
 identity に何を含めるか、handoff が具体的に何を照合するかは
-`docs/RULE-EXPERIMENT.md` §8。
+`docs/RULE-EXPERIMENT.md`。
 
 ### (10) 推定を計測に混ぜない
 
@@ -270,7 +270,7 @@ identity に何を含めるか、handoff が具体的に何を照合するかは
   当て直せることで、**再現性の担保対象を実行から推定へ移す**
 - **推定器の identity を記録する。** どの推定器の主張かを後から復元できる識別子を
   推定記録に残す。identity の無い推定は、その推定が誰の主張かを復元できない
-  （identity の構成は `docs/RULE-EXPERIMENT.md` §7.3）
+  （identity の構成は `docs/RULE-EXPERIMENT.md`）
 - **未較正の推定器を使わない。** 推定器は較正（§1 の前提条件を確立する操作）で
   計測済みサイクルの結果と突き合わせてから使う。未較正の推定器の null 推定は
   「効果が無かった」のか「推定器が見つけられなかった」のか区別できない
@@ -279,7 +279,7 @@ identity に何を含めるか、handoff が具体的に何を照合するかは
 推定器の**中身**（LLM か、統計か、ヒューリスティックか）は装置へ焼き込まない
 （不変条件 2 と同型）。装置が固定するのは凍結入力・推定記録の形・推定器 identity の
 記録の3点だけである。凍結入力の束・推定器 interface・較正の手順は
-`docs/RULE-EXPERIMENT.md` §7。
+`docs/RULE-EXPERIMENT.md`。
 
 ## 5. 機能追加の適合判定
 
@@ -304,8 +304,6 @@ docs/EXECUTION-UNIT.md         実行の所属基準の正本（executionUnitHas
 docs/ARM-SCOPE.md              アームの可視範囲と workload 適格性の正本
     ↓
 docs/USER-GUIDE.md             利用者・エージェントが実際に行う操作手順
-docs/REVIEW-CRITERIA.md        記録（計測ログ）の記入基準
-docs/CYCLE-RECORD-CRITERIA.md  サイクル記録の判定基準
 implementation                 `apparatus/`
 ```
 

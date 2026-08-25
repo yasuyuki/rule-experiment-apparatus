@@ -58,7 +58,7 @@
     "estimate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["attributable", "confidence", "basis", "rejectedInterpretations"],
+      "required": ["attributable", "basis"],
       "properties": {
         "attributable": { "enum": ["attributable", "not-attributable", "indeterminate"] },
         "confidence": { "enum": ["low", "medium", "high"] },

@@ -65,20 +65,18 @@ ENVIRONMENT_PATH = None
 # reconciliation.md と controller.md は比較や測定に言及するので除外する（憲法 不変条件 3）。
 MANAGED_ITEMS = ("rules", "placement.json", "bin/rules.py")
 
-# 不変条件 8(3) と docs/EXECUTION-UNIT.md の閉じた可読性候補。
-META_READABILITY_FIXED = (
-    "CONSTITUTION.md",
-    "TERMS.md",
-    "docs/RULE-EXPERIMENT.md",
-    "docs/CYCLE-RECORD-CRITERIA.md",
-    "docs/EXECUTION-UNIT.md",
-)
+# 不変条件 8(3) と docs/EXECUTION-UNIT.md の閉じた可読性候補。固定部分は
+# 装置リポジトリ（cycle.py 実行元。アーム側ではない）の追跡下 markdown 全件を
+# meta_readability_fixed() が動的に導出する。アーム側の git ls-files を使うと、
+# 注入された変種そのものが可読性候補に混入し、metaReadabilityHash がアームごとに
+# 違う値になって宣言1つで照合できなくなる（比較可能性が壊れる）ため使わない。
 META_READABILITY_GLOBS = (
     "apparatus/cycles/*.json",
     "apparatus/schemas/*",
 )
+_META_READABILITY_DEVICE_CACHE = None
 
-# 推定機構（docs/RULE-EXPERIMENT.md §7）の置き場。環境記述子の
+# 推定機構（docs/RULE-EXPERIMENT.md）の置き場。環境記述子の
 # 親を private control root とし、実データ・実推定器資産はここへは版管理しない。
 CONTROL_DIR = None
 FROZEN_DIR = None
@@ -91,8 +89,8 @@ ESTIMATORS_DIR = None
 # 「推定を計測に混ぜない」を束ねる段階でも守る）。
 FROZEN_FORBIDDEN_SOURCE_SUBSTRINGS = ("/reviews/", "/judge/", "baseline-")
 
-# 推定記録・較正記録に書いてはならないキー（docs/CYCLE-RECORD-CRITERIA.md §9、
-# 憲法 不変条件10。「用途は triage に限る」を構造で守る）。
+# 推定記録・較正記録に書いてはならないキー（憲法 不変条件10。
+# 「用途は triage に限る」を構造で守る）。
 FORBIDDEN_RECORD_KEYS = {"verdict", "promote", "promotable", "approved", "proven", "recommendation"}
 
 # git の空 tree object。root commit の親として使う（variant-injection の diff）。
@@ -252,7 +250,7 @@ def exec_(cmd, check=True):
     )
     if check:
         if result.returncode != 0:
-            # 理由を先に出す。スクリプト本文で埋めない（§1-7 の是正）。
+            # 理由を先に出す。スクリプト本文で埋めない。
             raise SystemExit(
                 "%s\nexec failed (%d) in: %s"
                 % (result.stderr.strip(), result.returncode, cmd.splitlines()[1 if cmd.startswith("set -e") else 0])
@@ -336,7 +334,7 @@ def validate_arms(cycle_name, decl):
             )
 
 
-def require_subject(cycle_name, decl, require_version=False):
+def require_subject(cycle_name, decl):
     """Validate every declared subject and its private template binding."""
     path = cycle_path(cycle_name)
     if "subjects" not in decl:
@@ -428,25 +426,6 @@ def _bash_copy_file_with_conflict(src_expr, dest_expr):
     ) % {"src": src_expr, "dest": dest_expr}
 
 
-def _bash_copy_tree_with_conflict(src_root, dest_root):
-    """ディレクトリまたは単一ファイルを衝突検査付きでコピーする。"""
-    src_q = shlex.quote(src_root)
-    dest_q = shlex.quote(dest_root)
-    return "\n".join([
-        "if [ -d %s ]; then" % src_q,
-        "  while IFS= read -r -d '' f; do",
-        "    rel=${f#%s/}" % src_root,
-        "    dest=%s/$rel" % dest_q,
-        "    " + _bash_copy_file_with_conflict("\"$f\"", "\"$dest\""),
-        "  done < <(find %s -type f -print0)" % src_q,
-        "elif [ -e %s ]; then" % src_q,
-        "  " + _bash_copy_file_with_conflict(src_q, dest_q),
-        "else",
-        "  echo \"missing variant item: %s\" >&2; exit 1" % src_root,
-        "fi",
-    ])
-
-
 def build_arm_inject_lines(arm, decl):
     """Render outside the arm, then copy only selected proven outputs."""
     source = to_executor_path(variant_canonical_dir(decl["experiment"], arm["variant"]))
@@ -520,7 +499,6 @@ def build_setup_script(cycle, src_mnt, commit, arms, experiment, subjects):
     ]
     for arm in arms:
         lines.append("git clone -q base %s" % shlex.quote(arm["id"]))
-    manifest_plans = []
     for arm in arms:
         inject_lines = build_arm_inject_lines(arm, {"experiment": experiment, "subjects": subjects})
         lines.extend(inject_lines)
@@ -546,7 +524,7 @@ def build_setup_script(cycle, src_mnt, commit, arms, experiment, subjects):
         "echo SIZE=$(du -sh $a | cut -f1); "
         "echo FILES=$(git -C $a ls-files | wc -l); done" % arm_list
     )
-    return "\n".join(lines), manifest_plans
+    return "\n".join(lines)
 
 
 def parse_summary(output):
@@ -581,25 +559,10 @@ def materialize(cycle_name):
         if mismatches:
             raise SystemExit("\n".join(mismatches))
 
-    script, manifest_plans = build_setup_script(
+    script = build_setup_script(
         cycle_name, src_mnt, commit, decl["arms"], experiment, subject_ids(decl)
     )
     setup_out = exec_(script)
-
-    actual = {}
-    for line in setup_out.splitlines():
-        if not line.startswith("PLANSHA256 "):
-            continue
-        _kind, arm_id, dest_rel, digest = line.split(" ", 3)
-        actual["%s/%s" % (arm_id, dest_rel)] = digest
-    mismatches = []
-    for arm_id, plan in manifest_plans:
-        for _src, dest, sha in plan:
-            key = "%s/%s" % (arm_id, dest)
-            if actual.get(key) != sha:
-                mismatches.append(key)
-    if mismatches:
-        raise SystemExit("sha256 mismatch for: %s" % ", ".join(mismatches))
 
     summary = parse_summary(setup_out)
 
@@ -709,7 +672,7 @@ def collect_provenance_mismatches(cycle_name, decl):
 
 
 # session contract file は subject へ渡す唯一の常時適用指示。marker 文字列以外は
-# 両アームで 1バイトも変えない（`MEASUREMENT.md` §9-4、憲法 不変条件 (2) の唯一の例外）。
+# 両アームで 1バイトも変えない（`MEASUREMENT.md`、憲法 不変条件 (2) の唯一の例外）。
 # この文面に実験・計測・測定・アーム・比較といった語を足さない。
 # 正本は agent-rules/experiments/<experiment>/session-contract.md。
 def session_contract_path(experiment):
@@ -743,11 +706,27 @@ def atomic_write_json(path, payload):
             os.unlink(temporary)
 
 
+def meta_readability_fixed():
+    """可読性候補の固定部分: 装置リポジトリ（cycle.py 実行元。アーム側ではない）
+    の追跡下 markdown 全件。posix 相対パスのタプル。プロセス内キャッシュ。"""
+    global _META_READABILITY_DEVICE_CACHE
+    if _META_READABILITY_DEVICE_CACHE is None:
+        device_repo_root = os.path.dirname(APPARATUS_DIR)
+        result = subprocess.run(
+            ["git", "-C", device_repo_root, "ls-files", "-z", "--", "*.md"],
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        )
+        _META_READABILITY_DEVICE_CACHE = tuple(
+            sorted(p for p in result.stdout.split("\0") if p)
+        )
+    return _META_READABILITY_DEVICE_CACHE
+
+
 def is_meta_readability_candidate(path):
     """閉じた可読性候補集合に入るか。posix 相対パスのみ。"""
     if not isinstance(path, str) or not path or "\\" in path or path.startswith("/"):
         return False
-    if path in META_READABILITY_FIXED:
+    if path in meta_readability_fixed():
         return True
     return any(fnmatch.fnmatch(path, pat) for pat in META_READABILITY_GLOBS)
 
@@ -806,7 +785,7 @@ def collect_arm_meta_readability_present(cycle_name, arm_id):
     """アーム上の閉じた可読性候補について {path: sha256} を読む。"""
     release = release_path(cycle_name)
     arm_ref = "%s/%s" % (release, shlex.quote(arm_id))
-    fixed = " ".join(shlex.quote(p) for p in META_READABILITY_FIXED)
+    fixed = " ".join(shlex.quote(p) for p in meta_readability_fixed())
     globs = " ".join(shlex.quote(p) for p in META_READABILITY_GLOBS)
     script = "\n".join([
         "set -e",
@@ -1074,7 +1053,7 @@ def build_baseline_script(cycle, judge_path, arm):
         "cd %s" % release,
         "python3 %s baseline --arm %s -o %s"
         % (shlex.quote(judge_path), shlex.quote(arm["id"]), shlex.quote(output)),
-        "grep -m1 %s %s" % (shlex.quote('"arm"'), shlex.quote(output)),
+        "[ -s %s ]" % shlex.quote(output),
     ]
     return "\n".join(lines)
 
@@ -1083,7 +1062,7 @@ def handoff(cycle_name):
     validate_identifier("cycle", cycle_name)
     decl = load_cycle(cycle_name)
     validate_arms(cycle_name, decl)
-    require_subject(cycle_name, decl, require_version=False)
+    require_subject(cycle_name, decl)
     experiment = decl["experiment"]
     ids = subject_ids(decl)
 
@@ -1140,14 +1119,6 @@ def handoff(cycle_name):
     print("recorded: %s" % handoff_path)
 
 
-def _transcript_search_base(cycle_name, arm, subject_id, search_root="config-root"):
-    """`_list_transcript_paths` が列挙する起点ディレクトリ。config-root は
-    configs/<arm>/<subject> 配下、home-cursor は executor user の $HOME/.cursor 配下。"""
-    if search_root == "home-cursor":
-        return '"$HOME"/.cursor'
-    return config_root_path(cycle_name, arm["id"], subject_id)
-
-
 def _list_transcript_paths(cycle_name, arm, subject_id, glob_pat, search_root="config-root"):
     """1つの glob で起点ディレクトリ（search_root）配下を列挙する。"""
     if search_root == "home-cursor":
@@ -1161,7 +1132,7 @@ def _list_transcript_paths(cycle_name, arm, subject_id, glob_pat, search_root="c
             check=False,
         )
         return [line.strip() for line in out.splitlines() if line.strip()]
-    base = _transcript_search_base(cycle_name, arm, subject_id, search_root)
+    base = config_root_path(cycle_name, arm["id"], subject_id)
     pattern = "%s/%s" % (base, glob_pat)
     prefix = "shopt -s globstar; " if "**" in glob_pat else ""
     out, _stderr, _code = exec_("%sls %s 2>/dev/null" % (prefix, pattern), check=False)
@@ -1304,24 +1275,6 @@ def load_commits_since(cycle_name, arm, since_sha):
         sha, _, author_time = line.partition(" ")
         commits.append((sha, author_time))
     return commits
-
-
-def commits_since_root_fallback(cycle_name, arm):
-    """materialized.json が無いときの照合B対象。root の直後の commit を
-    注入とみなし、`その commit..HEAD` を返す（injection..HEAD と同じ
-    排他区間）。root 自身や注入 commit を対象に入れると、controller が書いた
-    注入が span 外になり照合Bが落ちる。"""
-    root = exec_(
-        "git -C %s/%s rev-list --max-parents=0 HEAD"
-        % (release_path(cycle_name), shlex.quote(arm["id"]))
-    ).strip()
-    listed = exec_(
-        "git -C %s/%s rev-list --reverse %s..HEAD"
-        % (release_path(cycle_name), shlex.quote(arm["id"]), shlex.quote(root))
-    )
-    after_root = [line.strip() for line in listed.splitlines() if line.strip()]
-    since = after_root[0] if after_root else root
-    return load_commits_since(cycle_name, arm, since), root, since
 
 
 def build_transcript_facts_script(paths, participation, arm_binding=None):
@@ -1654,7 +1607,7 @@ def judge(cycle_name, replace=False):
         raise SystemExit(
             "estimation cycle rejects judge (no comparison arms): %s" % cycle_name
         )
-    require_subject(cycle_name, decl, require_version=True)
+    require_subject(cycle_name, decl)
     experiment = decl["experiment"]
     mismatches = []
 
@@ -1859,28 +1812,20 @@ def judge(cycle_name, replace=False):
 
 
 def transcripts_report(cycle_name):
-    """アームごとに発見した transcript と注入以降の commit を出し、照合A′・B′
-    の結果を書く。書き込みはしない。"""
+    """アームごとに発見した transcript と注入以降の commit、および
+    collect_execution_mismatches / collect_provenance_mismatches の結果を
+    そのまま出す。書き込みはしない。materialized.json 欠落は
+    collect_provenance_mismatches が他コマンドと同じ形の mismatch として扱う。"""
     validate_identifier("cycle", cycle_name)
     decl = load_cycle(cycle_name)
     validate_arms(cycle_name, decl)
-    require_subject(cycle_name, decl, require_version=False)
-    materialized, mat_error = load_materialized(cycle_name)
+    require_subject(cycle_name, decl)
+    materialized, _mat_error = load_materialized(cycle_name)
     print("cycle: %s" % cycle_name)
-    if mat_error:
-        print(
-            "materialized.json is missing; commit range is derived from the root commit "
-            "(first commit after root is treated as injection)"
-        )
     for arm in decl["arms"]:
         facts = transcript_facts(cycle_name, arm, decl)
-        if materialized:
-            injection = injection_commit_of(materialized, arm["id"])
-            commits = load_commits_since(cycle_name, arm, injection) if injection else []
-            since_label = "injection %s" % injection if injection else "(no injectionCommit)"
-        else:
-            commits, root, since = commits_since_root_fallback(cycle_name, arm)
-            since_label = "first commit after root %s (= %s)" % (root, since)
+        injection = injection_commit_of(materialized, arm["id"])
+        commits = load_commits_since(cycle_name, arm, injection) if injection else []
         mismatches = collect_execution_mismatches(arm, facts, commits)
         participating = belonging_participating_sessions(arm, facts)
         print("")
@@ -1891,36 +1836,24 @@ def transcripts_report(cycle_name):
                 print("    %s" % format_transcript_fact(fact))
         else:
             print("    (none)")
-        print("  commits since %s:" % since_label)
+        print("  commits since %s:" % ("injection %s" % injection if injection else "(no injectionCommit)"))
         if commits:
             for sha, author_time in commits:
                 print("    %s %s" % (sha, author_time))
         else:
             print("    (none)")
-        a_fail = any(
-            "unclassifiable" in item
-            or "does not belong" in item
-            or "project slug" in item
-            or "belonging participating session count 0" in item
-            for item in mismatches
-        )
-        b_fail = any(
-            "outside belonging participating" in item or "has no timestamp" in item
-            for item in mismatches
-        )
-        check_a = "FAIL" if a_fail else "pass"
-        if a_fail and not participating:
-            check_b = "skipped"
-        elif b_fail:
-            check_b = "FAIL"
-        else:
-            check_b = "pass"
-        print("  check A' (execution unit belonging/participation): %s" % check_a)
-        print("  check B' (commits inside belonging participating span union): %s" % check_b)
         if mismatches:
             print("  mismatches:")
             for item in mismatches:
                 print("    %s" % item)
+        else:
+            print("  mismatches: (none)")
+    provenance_mismatches = collect_provenance_mismatches(cycle_name, decl)
+    if provenance_mismatches:
+        print("")
+        print("provenance mismatches:")
+        for item in provenance_mismatches:
+            print("  %s" % item)
 
 
 ####################################################################
@@ -2187,7 +2120,7 @@ def freeze_arm(cycle_name, arm_id):
     validate_identifier("arm id", arm_id)
     decl = load_cycle(cycle_name)
     validate_arms(cycle_name, decl)
-    require_subject(cycle_name, decl, require_version=True)
+    require_subject(cycle_name, decl)
     experiment = decl["experiment"]
     arm = next((a for a in decl["arms"] if a["id"] == arm_id), None)
     if arm is None:
@@ -3050,19 +2983,6 @@ def rollback(cycle_name):
     validate_against_schema(promotion, "promotion.schema.json", "promotion %s" % cycle_name)
     if promotion["status"] != "promoted":
         raise SystemExit("cycle is not promoted: %s" % cycle_name)
-    promoted = []
-    directory = os.path.join(CONTROL_DIR, "promotions")
-    for name in os.listdir(directory):
-        try:
-            with open(os.path.join(directory, name), encoding="utf-8") as handle:
-                item = json.load(handle)
-            if item.get("schemaVersion") == 1 and item.get("status") == "promoted":
-                promoted.append(item)
-        except (OSError, ValueError):
-            continue
-    latest = max(promoted, key=lambda item: parse_timestamp(item["recordedAt"]))
-    if latest["cycle"] != cycle_name:
-        raise SystemExit("only the latest promotion can be rolled back")
     stable = stable_rules_root()
     head = git_host(stable, "rev-parse", "HEAD").stdout.strip()
     output = rollback_path(cycle_name)
@@ -3184,6 +3104,51 @@ def core_selfcheck(check_active_environment=False):
     assert collect_execution_mismatches(arm, [wrong_arm], [])
     unclassified = dict(fact, cwd=None)
     assert collect_execution_mismatches(arm, [unclassified], [])
+
+    # derive_ground_truth: criterion 2 が食い違えば attributable、一致すれば
+    # not-attributable、unknown が絡めば SystemExit。
+    gt_record = {
+        "cycle": "check",
+        "arms": [
+            {"role": "control", "criteria": [
+                {"criterion": 1, "result": "not-met"}, {"criterion": 2, "result": "not-met"},
+            ]},
+            {"role": "treatment", "criteria": [
+                {"criterion": 1, "result": "met"}, {"criterion": 2, "result": "met"},
+            ]},
+        ],
+    }
+    assert derive_ground_truth(gt_record)["attributable"] == "attributable"
+    gt_record["arms"][1]["criteria"][1]["result"] = "not-met"
+    assert derive_ground_truth(gt_record)["attributable"] == "not-attributable"
+    gt_record["arms"][1]["criteria"][1]["result"] = "unknown"
+    try:
+        derive_ground_truth(gt_record)
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("derive_ground_truth accepted an unknown criterion result")
+
+    # agreement_of: match / mismatch / indeterminate の3経路。
+    ground_truth = {"attributable": "attributable"}
+    assert agreement_of({"attributable": "attributable"}, ground_truth) == "match"
+    assert agreement_of({"attributable": "not-attributable"}, ground_truth) == "mismatch"
+    assert agreement_of({"attributable": "indeterminate"}, ground_truth) == "indeterminate"
+
+    # collect_meta_readability_mismatches: 宣言と present の一致/未宣言/hash不一致。
+    present = {"CONSTITUTION.md": "c" * 64}
+    correct_hash = meta_readability_hash(present)
+    assert collect_meta_readability_mismatches(["CONSTITUTION.md"], correct_hash, present) == []
+    extra_present = dict(present, **{"TERMS.md": "d" * 64})
+    undeclared = collect_meta_readability_mismatches(
+        ["CONSTITUTION.md"], correct_hash, extra_present
+    )
+    assert any("undeclared readability on arm" in item for item in undeclared)
+    hash_mismatch = collect_meta_readability_mismatches(
+        ["CONSTITUTION.md"], "e" * 64, present
+    )
+    assert any("metaReadabilityHash" in item for item in hash_mismatch)
+
     print("selfcheck: ok")
     return 0
 

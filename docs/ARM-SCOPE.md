@@ -32,13 +32,12 @@ public source は通常の `.gitignore` を使い、local declaration、runtime 
 | 経路 | 追跡 |
 |---|---|
 | `docs/**` | 追跡される |
-| `apparatus/*.py`, `apparatus/README.md`, `apparatus/requirements.txt` | 追跡される |
+| `apparatus/*.py`, `apparatus/requirements.txt` | 追跡される |
 | `apparatus/schemas/*.json`, `apparatus/subjects/*.json` | 追跡される |
 | `apparatus/cycles/*.json` | operator-local input。ignore され、commit しない |
 | `CONSTITUTION.md`, `TERMS.md`, `README.md` | 追跡される |
 
-新しい source path を追加するときは `.gitignore` と repository boundary test の両方で
-公開対象か local data かを明示する。
+新しい source path を追加するときは `.gitignore` で公開対象か local data かを明示する。
 
 ## 3. アームの中で完結しないもの
 
