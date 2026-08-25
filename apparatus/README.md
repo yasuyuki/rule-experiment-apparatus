@@ -13,8 +13,11 @@ Promotable variants live at `experiments/<experiment>/variants/<variant>/source/
 complete managed source: `rules/`, `placement.json`, and `bin/rules.py`. `variantTree` is the Git
 tree of that `source/` directory. Snapshot manifests are not accepted.
 
-`handoff` clones templates into `configs/<arm>/<subject>/`, overlays the marker contract, hashes
-descriptor `identityPaths`, and writes a separate handoff record. `judge` discovers every declared
+`handoff` clones templates into `configs/<arm>/<subject>/`, strips descriptor `credentialPaths` and
+the transcript root from the clone, symlinks credentials in from the optional `credentialStore`,
+overlays the marker contract, computes `configIdentity` as the content hash of the surviving plain
+files (credentials and the marker are excluded, since they are expected to differ per arm or per
+run), and writes a separate handoff record. `judge` discovers every declared
 subject session, rejects unclassified or out-of-arm sessions and commits outside session spans,
 writes one execution manifest, then passes it to every arm with `--execution`.
 

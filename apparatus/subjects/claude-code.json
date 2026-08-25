@@ -5,7 +5,7 @@
   "versionCommand": "claude --version",
   "binary": "claude",
   "markerFile": "CLAUDE.md",
-  "identityPaths": [".credentials.json", "settings.json"],
+  "credentialPaths": [".credentials.json", ".claude.json"],
   "workspacePlacement": [
     { "path": ".claude/rules/*.md", "proven": true }
   ],

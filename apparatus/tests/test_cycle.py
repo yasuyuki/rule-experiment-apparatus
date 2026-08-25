@@ -92,9 +92,14 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
     subjects = temp / "subjects"
     cycles = temp / "cycles"
     template = temp / "template"
+    authstore = temp / "authstore"
     for path in (control, subjects, cycles, template):
         path.mkdir(parents=True)
-    write(template / "auth.json", "fixture-auth\n")
+    # store と別内容にして、複製ではなく store の内容が使われることを検証できるようにする。
+    write(template / "auth.json", "fixture-template-auth\n")
+    write(template / "settings.json", "fixture-settings\n")
+    write(template / "sessions" / "foreign.jsonl", '{"type":"assistant"}\n')
+    write(authstore / "auth.json", "fixture-store-auth\n")
 
     git_init(base)
     write(base / "README.md", "fixture\n")
@@ -132,7 +137,7 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
     descriptor = {
         "id": "demo", "tool": "demo", "isolationEnv": "DEMO_HOME",
         "versionCommand": "printf demo-1", "binary": "true", "markerFile": "MARKER.md",
-        "identityPaths": ["auth.json"],
+        "credentialPaths": ["auth.json"],
         "workspacePlacement": [{"path": ".rules/*.txt", "proven": True}],
         "keepEmpty": ["SUBJECT-UNUSED.md"],
         "transcripts": {
@@ -148,8 +153,8 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         "executor": {"kind": "local-posix"}, "variantSourceRoot": str(source),
         "stableRules": {"root": str(stable), "branch": "main"},
         "subjects": {
-            "demo": {"configTemplate": str(template)},
-            "demo2": {"configTemplate": str(template)},
+            "demo": {"configTemplate": str(template), "credentialStore": str(authstore)},
+            "demo2": {"configTemplate": str(template), "credentialStore": str(authstore)},
         },
     }
     environment_path = control / "environment.json"
@@ -187,6 +192,7 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
     release = Path.home() / "releases" / "fixture-core"
     if release.exists():
         shutil.rmtree(release)
+    extra_releases = []
     try:
         unproven = dict(descriptor)
         unproven["workspacePlacement"] = [{"path": ".rules/*.txt", "proven": False}]
@@ -220,6 +226,169 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
             (control / "handoffs" / "fixture-core.json").read_text(encoding="utf-8")
         )
         assert_schema_contract(handoff_record, "handoff.schema.json")
+
+        # --- credential handling (Constitution 不変条件 (9)) ---
+        auth_targets = [
+            release / "configs" / arm["id"] / "demo" / "auth.json"
+            for arm in declaration["arms"]
+        ]
+        for target in auth_targets:  # A1: credential is a symlink, not a copy
+            assert target.is_symlink(), "expected symlink: %s" % target
+        for target in auth_targets:  # A2: symlink resolves to the store's content
+            assert target.read_text(encoding="utf-8") == "fixture-store-auth\n"
+        for arm in declaration["arms"]:  # A3: transcript root is excluded from the clone
+            foreign = release / "configs" / arm["id"] / "demo" / "sessions" / "foreign.jsonl"
+            assert not foreign.exists(), "transcript root was not excluded: %s" % foreign
+
+        recorded_identities = {
+            subject["configIdentity"]
+            for arm in handoff_record["arms"] for subject in arm["subjects"]
+        }
+        assert len(recorded_identities) == 1, recorded_identities  # A4
+        config_identity = next(iter(recorded_identities))
+
+        def independent_config_identity(template_dir, credential_paths, transcript_root):
+            files = []
+            for root, _dirs, names in os.walk(template_dir):
+                for name in names:
+                    full = Path(root) / name
+                    rel = full.relative_to(template_dir).as_posix()
+                    if rel in credential_paths:
+                        continue
+                    if transcript_root is not None and (
+                        rel == transcript_root or rel.startswith(transcript_root + "/")
+                    ):
+                        continue
+                    files.append(rel)
+            files.sort()
+            lines = []
+            for rel in files:
+                digest = hashlib.sha256((template_dir / rel).read_bytes()).hexdigest()
+                lines.append("%s  ./%s\n" % (digest, rel))
+            return hashlib.sha256("".join(lines).encode("utf-8")).hexdigest()
+
+        expected_identity = independent_config_identity(template, {"auth.json"}, "sessions")
+        assert config_identity == expected_identity  # A5
+
+        def run_cycle_with_store(name, credential_store):
+            """独立した cycle を materialize + handoff する。credential_store が
+            None なら credentialStore を持たない環境で実行する。"""
+            subjects_env = {
+                "demo": {"configTemplate": str(template)},
+                "demo2": {"configTemplate": str(template)},
+            }
+            if credential_store is not None:
+                for entry in subjects_env.values():
+                    entry["credentialStore"] = credential_store
+            alt_environment = dict(environment)
+            alt_environment["subjects"] = subjects_env
+            alt_environment_path = control / ("environment-%s.json" % name)
+            write(alt_environment_path, json.dumps(alt_environment))
+            candidate = json.loads(json.dumps(declaration))
+            candidate["cycle"] = name
+            write(cycles / (name + ".json"), json.dumps(candidate))
+            cycle.configure_environment(str(alt_environment_path))
+            cycle._subject_cache.clear()
+            try:
+                cycle.materialize(name)
+                cycle.handoff(name)
+            finally:
+                cycle.configure_environment(str(environment_path))
+                cycle._subject_cache.clear()
+            return Path.home() / "releases" / name
+
+        # A6: rotating the store's credential must not move configIdentity.
+        write(authstore / "auth.json", "fixture-store-auth-rotated\n")
+        rotated_release = run_cycle_with_store("fixture-core-rotate", str(authstore))
+        extra_releases.append(rotated_release)
+        rotated_record = json.loads(
+            (control / "handoffs" / "fixture-core-rotate.json").read_text(encoding="utf-8")
+        )
+        rotated_identities = {
+            subject["configIdentity"]
+            for arm in rotated_record["arms"] for subject in arm["subjects"]
+        }
+        assert rotated_identities == {expected_identity}
+
+        # A7: a real file where a credential symlink belongs must fail freeze().
+        control_auth = release / "configs" / "control" / "demo" / "auth.json"
+        control_auth.unlink()
+        write(control_auth, "not a symlink\n")
+        try:
+            cycle.freeze_arm("fixture-core", "control")
+        except SystemExit as exc:
+            assert "credential file in release" in str(exc)
+        else:
+            raise AssertionError("credential file placement mismatch was accepted")
+        finally:
+            control_auth.unlink()
+            control_auth.symlink_to(authstore / "auth.json")
+
+        # A8: a subject descriptor without credentialPaths (the old-format shape,
+        # pre-credentialPaths) fails schema validation (required violation).
+        legacy = dict(descriptor)
+        del legacy["credentialPaths"]
+        legacy["id"] = "legacy"
+        write(subjects / "legacy.json", json.dumps(legacy))
+        cycle._subject_cache.clear()
+        try:
+            cycle.load_subject("legacy")
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("subject without credentialPaths was accepted")
+
+        # A9: a credentialPaths entry containing '..' is rejected.
+        traversal = dict(descriptor)
+        traversal["id"] = "traversal"
+        traversal["credentialPaths"] = ["../escape"]
+        write(subjects / "traversal.json", json.dumps(traversal))
+        cycle._subject_cache.clear()
+        try:
+            cycle.load_subject("traversal")
+        except SystemExit as exc:
+            assert "credentialPaths" in str(exc)
+        else:
+            raise AssertionError("credentialPaths traversal entry was accepted")
+        cycle._subject_cache.clear()
+
+        # A10: a credentialStore under $HOME/releases must fail handoff.
+        bad_store = str(Path.home() / "releases" / "fixture-core-bad-store-target")
+        try:
+            run_cycle_with_store("fixture-core-badstore", bad_store)
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("credentialStore under $HOME/releases was accepted")
+        finally:
+            bad_release = Path.home() / "releases" / "fixture-core-badstore"
+            if bad_release.exists():
+                shutil.rmtree(bad_release)
+
+        # A11: an omitted credentialStore leaves the config root without the credential.
+        no_store_release = run_cycle_with_store("fixture-core-nostore", None)
+        extra_releases.append(no_store_release)
+        assert not (no_store_release / "configs" / "control" / "demo" / "auth.json").exists()
+
+        # A12: a credentialStore starting with '~' must fail before touching the filesystem.
+        env_tilde = dict(environment)
+        env_tilde["subjects"] = {
+            "demo": {"configTemplate": str(template), "credentialStore": "~/store"},
+            "demo2": {"configTemplate": str(template)},
+        }
+        env_tilde_path = control / "environment-tilde.json"
+        write(env_tilde_path, json.dumps(env_tilde))
+        cycle.configure_environment(str(env_tilde_path))
+        try:
+            cycle.executor_store_path("demo")
+        except SystemExit as exc:
+            assert "must not start with '~'" in str(exc)
+        else:
+            raise AssertionError("credentialStore starting with '~' was accepted")
+        finally:
+            cycle.configure_environment(str(environment_path))
+            cycle._subject_cache.clear()
+
         start = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
         for index, arm in enumerate(declaration["arms"]):
             arm_root = release / arm["id"]
@@ -349,5 +518,8 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         cycle.CYCLES_DIR, cycle.SUBJECTS_DIR = old
         if release.exists():
             shutil.rmtree(release)
+        for extra in extra_releases:
+            if extra.exists():
+                shutil.rmtree(extra)
 
 print("cycle fixture: ok")

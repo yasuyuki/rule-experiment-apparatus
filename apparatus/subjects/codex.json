@@ -5,7 +5,7 @@
   "versionCommand": "codex --version",
   "binary": "codex",
   "markerFile": "AGENTS.md",
-  "identityPaths": ["auth.json"],
+  "credentialPaths": ["auth.json"],
   "workspacePlacement": [
     { "path": "AGENTS.md", "proven": true }
   ],

@@ -8,8 +8,10 @@ python3 apparatus/cycle.py --environment <environment.json> materialize --cycle 
 python3 apparatus/cycle.py --environment <environment.json> handoff --cycle <cycle>
 ```
 
-Run each printed subject launch command and give each subject the same verbatim `workload.md`.
-After all sessions finish and arm changes are committed:
+Run each printed subject launch command and give each subject the same verbatim `workload.md`. For
+a subject whose credential rotates (see `subjects.<id>.credentialStore` in the setup guide), launch
+its arms one at a time rather than concurrently, since they share the same credential file through
+a symlink to the store. After all sessions finish and arm changes are committed:
 
 ```console
 python3 apparatus/cycle.py --environment <environment.json> transcripts --cycle <cycle>

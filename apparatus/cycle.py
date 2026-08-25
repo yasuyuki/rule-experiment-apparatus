@@ -192,6 +192,11 @@ def load_subject(subject_id):
             "subject id %r does not match filename stem %r: %s"
             % (subject.get("id"), subject_id, path)
         )
+    for entry in subject["credentialPaths"]:
+        if entry == "." or any(segment == ".." for segment in entry.split("/")):
+            raise SystemExit(
+                "invalid credentialPaths entry %r in subject %s" % (entry, subject_id)
+            )
     _subject_cache[subject_id] = subject
     return subject
 
@@ -920,6 +925,37 @@ def executor_template_path(subject_id):
     return to_executor_path(resolve_control_path(value))
 
 
+def executor_store_path(subject_id):
+    """credentialStore（任意）の executor 側パス。未設定なら None。
+
+    `~` は shlex.quote 越しでは展開されず無言で壊れるので明示的に拒否する
+    （executor_template_path にある同種の危険は変更しない）。"""
+    value = load_environment()["subjects"][subject_id].get("credentialStore")
+    if value is None:
+        return None
+    if value.startswith("~"):
+        raise SystemExit("credentialStore must not start with '~': %s" % value)
+    if value.startswith("/"):
+        return to_executor_path(value)
+    return to_executor_path(resolve_control_path(value))
+
+
+def transcript_exclude_root(subject):
+    """複製から除外する transcript の置き場（`transcripts.glob` の先頭
+    セグメントから導出）。transcript 非対応、または searchRoot が
+    home-cursor（config root の外を見る）の subject では除外なし（None）。"""
+    transcripts = subject["transcripts"]
+    if transcripts is None or transcripts.get("searchRoot") == "home-cursor":
+        return None
+    glob = transcripts["glob"]
+    root = glob.split("/", 1)[0]
+    if root in (".", "..") or any(ch in root for ch in "*?["):
+        raise SystemExit(
+            "transcripts.glob root segment cannot be a wildcard or parent reference: %r" % glob
+        )
+    return root
+
+
 def config_root_path(cycle, arm_id, subject_id):
     return "%s/configs/%s/%s" % (
         release_path(cycle), shlex.quote(arm_id), shlex.quote(subject_id)
@@ -927,7 +963,10 @@ def config_root_path(cycle, arm_id, subject_id):
 
 
 def build_config_script(cycle, experiment, arms, subjects):
-    """Clone each private template into configs/<arm>/<subject> and hash identity."""
+    """Clone each private template into configs/<arm>/<subject>, strip
+    credential and transcript paths from the clone, symlink credentials in
+    from the shared store (if configured), and hash the identity of the
+    surviving plain files."""
     lines = ["set -e"]
     contract = load_session_contract(experiment)
     for arm in arms:
@@ -940,26 +979,90 @@ def build_config_script(cycle, experiment, arms, subjects):
                 "mkdir -p %s" % cfg,
                 "cp -a %s/. %s/" % (shlex.quote(source), cfg),
             ])
+
+            exclude_paths = list(subject["credentialPaths"])
+            exclude_root = transcript_exclude_root(subject)
+            if exclude_root is not None:
+                exclude_paths.append(exclude_root)
+            for rel in exclude_paths:
+                lines.append("rm -rf %s/%s" % (cfg, shlex.quote(rel)))
+
+            store = executor_store_path(sid)
+            if store is not None:
+                lines.append(
+                    'case %s in "$HOME"/releases/*) echo %s >&2; exit 1;; esac'
+                    % (
+                        shlex.quote(store),
+                        shlex.quote("credentialStore must not point inside $HOME/releases: %s" % store),
+                    )
+                )
+                for rel in subject["credentialPaths"]:
+                    store_item = "%s/%s" % (store, shlex.quote(rel))
+                    target = "%s/%s" % (cfg, shlex.quote(rel))
+                    lines.append(
+                        "[ -e %s ] || { echo %s >&2; exit 1; }"
+                        % (store_item, shlex.quote("credential missing in store: %s" % rel))
+                    )
+                    lines.append("mkdir -p \"$(dirname %s)\"" % target)
+                    lines.append("ln -sfn %s %s" % (store_item, target))
+
             marker = subject["markerFile"]
             if marker is not None:
                 body = contract % (experiment, arm["variant"])
                 target = "%s/%s" % (cfg, shlex.quote(marker))
                 lines.append("mkdir -p \"$(dirname %s)\"" % target)
                 lines.append("cat > %s <<'CFGEOF'\n%sCFGEOF" % (target, body))
-            identity = " ".join(shlex.quote(p) for p in subject["identityPaths"])
+
+            for rel in subject["credentialPaths"]:
+                target = "%s/%s" % (cfg, shlex.quote(rel))
+                lines.append(
+                    "if [ -e %s ] && [ ! -L %s ]; then echo %s >&2; exit 1; fi"
+                    % (target, target, shlex.quote("credential file in release: %s" % rel))
+                )
+
+            if marker is not None:
+                prune = " ! -path %s" % shlex.quote("./%s" % marker)
+            else:
+                prune = ""
             lines.extend([
-                "identity=$({",
-                "  for rel in %s; do" % identity,
-                "    p=%s/$rel" % cfg,
-                "    if [ -f \"$p\" ]; then printf 'F %%s %%s\\n' \"$rel\" \"$(sha256sum \"$p\" | cut -d' ' -f1)\";" % (),
-                "    elif [ -d \"$p\" ]; then (cd %s && find \"$rel\" -type f -print0 | sort -z | xargs -0 -r sha256sum);" % cfg,
-                "    else echo \"missing identity path: $p\" >&2; exit 1; fi",
-                "  done",
-                "} | sha256sum | cut -d' ' -f1)",
+                "identity=$(cd %s && find . -type f%s -print0 "
+                "| LC_ALL=C sort -z | xargs -0 -r sha256sum | sha256sum | cut -d' ' -f1)"
+                % (cfg, prune),
                 "printf 'CONFIG %%s %%s %%s %%s\\n' %s %s \"$identity\" %s"
                 % (shlex.quote(arm["id"]), shlex.quote(sid), cfg),
             ])
     return "\n".join(lines)
+
+
+def collect_credential_placement_mismatches(cycle_name, decl):
+    """defence in depth after handoff: 各アーム×subject の credentialPaths が
+    config root で「不在または symlink」のままであることを照合する。
+    build_config_script 内の同種のアサーションを handoff 後の時点でも掛け
+    直す（手動編集や凍結準備時のドリフトを検出するため）。judge() からは
+    呼ばない（完了した計測を hygiene 理由で拒否させない）。"""
+    mismatches = []
+    lines = ["set -e"]
+    for arm in decl["arms"]:
+        for sid in subject_ids(decl):
+            subject = load_subject(sid)
+            cfg = config_root_path(cycle_name, arm["id"], sid)
+            for rel in subject["credentialPaths"]:
+                target = "%s/%s" % (cfg, shlex.quote(rel))
+                lines.append(
+                    "if [ -e %s ] && [ ! -L %s ]; then printf 'MISMATCH %%s %%s\\n' %s %s; fi"
+                    % (target, target, shlex.quote(arm["id"]), shlex.quote(rel))
+                )
+    if len(lines) == 1:
+        return mismatches
+    out = exec_("\n".join(lines))
+    for line in out.splitlines():
+        if line.startswith("MISMATCH "):
+            _tag, arm_id, rel = line.split(" ", 2)
+            mismatches.append(
+                "mismatch: %s credential file in release (must be absent or a symlink): %s"
+                % (arm_id, rel)
+            )
+    return mismatches
 
 
 def build_baseline_script(cycle, judge_path, arm):
@@ -2092,6 +2195,7 @@ def freeze_arm(cycle_name, arm_id):
 
     mismatches = []
     mismatches.extend(collect_provenance_mismatches(cycle_name, decl))
+    mismatches.extend(collect_credential_placement_mismatches(cycle_name, decl))
 
     materialized, _mat_error = load_materialized(cycle_name)
     facts = transcript_facts(cycle_name, arm, decl)

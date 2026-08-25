@@ -14,6 +14,11 @@ distribution beyond the experiment is outside the core.
 - Every selected subject uses an isolated `configs/<arm>/<subject>/` copied from the same private
   authenticated template. Tool version and starting config identity are recorded, not written into
   the declaration.
+- The copy excludes the subject descriptor's `credentialPaths` and the transcript root; credentials
+  are instead symlinked in from a single credential store outside the release, so a rotated
+  credential never needs to be recopied across arms or cycles. Starting config identity is the
+  content hash of the copied plain files only: it excludes credentials and the per-arm marker, so
+  it is expected to be identical across arms and stable across credential rotation.
 
 ## Variant and placement contract
 

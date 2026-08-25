@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": [
     "id", "tool", "isolationEnv", "versionCommand", "binary", "markerFile",
-    "identityPaths", "workspacePlacement", "keepEmpty", "transcripts"
+    "credentialPaths", "workspacePlacement", "keepEmpty", "transcripts"
   ],
   "properties": {
     "id": { "$ref": "#/$defs/identifier" },
@@ -20,8 +20,8 @@
         { "type": "null" }
       ]
     },
-    "identityPaths": {
-      "type": "array", "minItems": 1, "uniqueItems": true,
+    "credentialPaths": {
+      "type": "array", "minItems": 0, "uniqueItems": true,
       "items": { "type": "string", "minLength": 1, "pattern": "^[^/]" }
     },
     "workspacePlacement": { "$ref": "#/$defs/placementList" },

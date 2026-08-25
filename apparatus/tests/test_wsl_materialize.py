@@ -78,7 +78,7 @@ with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
     descriptor = {
         "id": "demo", "tool": "demo", "isolationEnv": "DEMO_HOME",
         "versionCommand": "true", "binary": "true", "markerFile": None,
-        "identityPaths": ["auth.json"],
+        "credentialPaths": [],
         "workspacePlacement": [{"path": ".rules/*.txt", "proven": True}],
         "keepEmpty": [], "transcripts": None,
     }
