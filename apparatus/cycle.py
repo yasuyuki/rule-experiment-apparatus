@@ -674,7 +674,7 @@ def collect_provenance_mismatches(cycle_name, decl):
 # session contract file は subject へ渡す唯一の常時適用指示。marker 文字列以外は
 # 両アームで 1バイトも変えない（`MEASUREMENT.md`、憲法 不変条件 (2) の唯一の例外）。
 # この文面に実験・計測・測定・アーム・比較といった語を足さない。
-# 正本は agent-rules/experiments/<experiment>/session-contract.md。
+# 正本は rule-experiment-source/experiments/<experiment>/session-contract.md。
 def session_contract_path(experiment):
     return os.path.join(
         variant_source_root(), "experiments", experiment, "session-contract.md"
@@ -2199,11 +2199,11 @@ def freeze_arm(cycle_name, arm_id):
         ),
         (
             "workload", "workload", workload_bytes,
-            "agent-rules/experiments/%s/workload.md" % experiment,
+            "rule-experiment-source/experiments/%s/workload.md" % experiment,
         ),
         (
             "measurement", "measurement", measurement_bytes,
-            "agent-rules/experiments/%s/MEASUREMENT.md" % experiment,
+            "rule-experiment-source/experiments/%s/MEASUREMENT.md" % experiment,
         ),
         (
             "variant-injection", "artifact-diff", variant_injection_patch,
