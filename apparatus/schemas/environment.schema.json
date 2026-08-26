@@ -4,7 +4,7 @@
   "title": "Rule experiment environment",
   "type": "object",
   "additionalProperties": false,
-  "required": ["executor", "variantSourceRoot", "stableRules", "subjects"],
+  "required": ["executor", "variantSourceRoot", "stableRules", "runsRoot", "profiles"],
   "properties": {
     "executor": {
       "oneOf": [
@@ -33,16 +33,11 @@
         "branch": { "type": "string", "minLength": 1 }
       }
     },
-    "subjects": {
+    "runsRoot": { "type": "string", "minLength": 1 },
+    "profiles": {
       "type": "object", "minProperties": 1,
-      "additionalProperties": {
-        "type": "object", "additionalProperties": false,
-        "required": ["configTemplate"],
-        "properties": {
-          "configTemplate": { "type": "string", "minLength": 1 },
-          "credentialStore": { "type": "string", "minLength": 1 }
-        }
-      }
+      "propertyNames": { "pattern": "^[A-Za-z0-9._-]+$" },
+      "additionalProperties": { "type": "string", "minLength": 1 }
     }
   }
 }

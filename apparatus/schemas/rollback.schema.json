@@ -2,19 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/apparatus/rollback.schema.json",
   "title": "Rollback record",
-  "type": "object", "additionalProperties": false,
+  "type": "object",
+  "additionalProperties": false,
   "required": [
-    "schemaVersion", "cycle", "recordedAt", "status", "reviewSha256",
-    "variantTree", "promotionCommit", "oldStableCommit", "newStableCommit",
-    "promotedManagedDigest", "restoredManagedDigest"
+    "schemaVersion", "cycle", "recordedAt", "status", "reviewSha256", "treatmentDigest",
+    "promotionCommit", "oldStableCommit", "newStableCommit", "promotedManagedDigest", "restoredManagedDigest"
   ],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "cycle": { "$ref": "#/$defs/identifier" },
     "recordedAt": { "$ref": "#/$defs/timestamp" },
     "status": { "enum": ["prepared", "rolled-back"] },
     "reviewSha256": { "$ref": "#/$defs/sha256" },
-    "variantTree": { "$ref": "#/$defs/gitObject" },
+    "treatmentDigest": { "$ref": "#/$defs/sha256" },
     "promotionCommit": { "$ref": "#/$defs/gitObject" },
     "oldStableCommit": { "$ref": "#/$defs/gitObject" },
     "newStableCommit": { "$ref": "#/$defs/gitObject" },

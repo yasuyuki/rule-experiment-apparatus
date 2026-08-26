@@ -1,11 +1,10 @@
-"""Windows controller -> WSL materialization parity fixture."""
+"""Windows controller to WSL adapter parity fixture."""
 
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
-import shlex
 import subprocess
 import tempfile
 
@@ -35,54 +34,71 @@ def git_init(path):
     run("git", "config", "user.email", "fixture@example.invalid", cwd=path)
 
 
-renderer = '''#!/usr/bin/env python3
-import os, sys
+def commit(path, message):
+    run("git", "add", "-A", cwd=path)
+    run("git", "commit", "-m", message, cwd=path)
+
+
+def git_value(path, *args):
+    return subprocess.check_output(["git", *args], cwd=path, text=True).strip()
+
+
+RENDERER = '''import os, sys
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-out = os.path.join(os.path.abspath(sys.argv[2]), ".rules", "demo.txt")
-os.makedirs(os.path.dirname(out), exist_ok=True)
-open(out, "wb").write(open(os.path.join(root, "rules", "demo.rule.md"), "rb").read())
+target = os.path.join(os.path.abspath(sys.argv[2]), ".rules", "demo.txt")
+os.makedirs(os.path.dirname(target), exist_ok=True)
+open(target, "wb").write(open(os.path.join(root, "rules", "demo.rule.md"), "rb").read())
 '''
+
+ADAPTER = '''import hashlib, json, os, subprocess, sys
+payload = json.load(sys.stdin)
+identity = hashlib.sha256(open(__file__, "rb").read()).hexdigest()
+subprocess.run(["python3", os.path.join(payload["variant"]["path"], "bin", "rules.py"),
+                "render", payload["workspace"]], check=True)
+placed = os.path.join(payload["workspace"], ".rules", "demo.txt")
+print(json.dumps({
+    "protocolVersion": 1, "adapterIdentity": identity, "subjectVersion": "fake-wsl-1",
+    "configIdentity": "c" * 64, "variantDigest": payload["variant"]["digest"],
+    "placements": [{"path": ".rules/demo.txt", "sha256": hashlib.sha256(open(placed, "rb").read()).hexdigest()}],
+    "launch": "fake " + payload["workspace"], "token": payload["workspace"],
+}))
+'''
+
 
 with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
     temp = Path(raw)
-    control, source, base = temp / "control", temp / "source", temp / "base"
-    subjects, cycles = temp / "subjects", temp / "cycles"
+    control, source, base, subjects, cycles = (temp / name for name in (
+        "control", "source", "base", "subjects", "cycles"
+    ))
     for path in (control, subjects, cycles):
         path.mkdir(parents=True)
 
     git_init(base)
     write(base / "README.md", "fixture\n")
-    run("git", "add", "README.md", cwd=base)
-    run("git", "commit", "-m", "base", cwd=base)
-    base_commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=base, text=True
-    ).strip()
+    commit(base, "base")
+    base_commit = git_value(base, "rev-parse", "HEAD")
 
     git_init(source)
     experiment = source / "experiments" / "demo"
+    write(experiment / "workload.md", "fixture\n")
+    write(experiment / "evaluate.py", "raise SystemExit('not used')\n")
     placement = {"tools": {"demo": {"path": ".rules/{id}.txt"}}}
-    trees = {}
-    for variant in ("v1", "v2"):
-        source_root = experiment / "variants" / variant / "source"
-        write(source_root / "bin" / "rules.py", renderer)
-        write(source_root / "placement.json", json.dumps(placement))
-        write(source_root / "rules" / "demo.rule.md", "same-result\n")
-    run("git", "add", ".", cwd=source)
-    run("git", "commit", "-m", "variants", cwd=source)
-    for variant in ("v1", "v2"):
-        trees[variant] = subprocess.check_output(
-            ["git", "rev-parse", "HEAD:experiments/demo/variants/%s/source" % variant],
-            cwd=source, text=True,
-        ).strip()
+    for variant, body in (("v1", "old\n"), ("v2", "new\n")):
+        variant_root = experiment / "variants" / variant / "source"
+        write(variant_root / "bin" / "rules.py", RENDERER)
+        write(variant_root / "placement.json", json.dumps(placement))
+        write(variant_root / "rules" / "demo.rule.md", body)
+    commit(source, "variants")
 
-    descriptor = {
-        "id": "demo", "tool": "demo", "isolationEnv": "DEMO_HOME",
-        "versionCommand": "true", "binary": "true", "markerFile": None,
-        "credentialPaths": [],
-        "workspacePlacement": [{"path": ".rules/*.txt", "proven": True}],
-        "keepEmpty": [], "transcripts": None,
-    }
-    write(subjects / "demo.json", json.dumps(descriptor))
+    adapter = subjects / "fake_adapter.py"
+    write(adapter, ADAPTER)
+    adapter_sha = hashlib.sha256(adapter.read_bytes()).hexdigest()
+    write(subjects / "fake.json", json.dumps({
+        "id": "fake", "protocolVersion": 1,
+        "adapter": {"entrypoint": "fake_adapter.py", "sha256": adapter_sha},
+        "profileRef": "fake",
+    }))
+    runs_root = "/tmp/rule-experiment-wsl-materialize"
     environment = {
         "executor": {
             "kind": "wsl", "distro": os.environ.get("APPARATUS_WSL_DISTRO", "Ubuntu-24.04"),
@@ -90,41 +106,52 @@ with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
         },
         "variantSourceRoot": str(source),
         "stableRules": {"root": str(base), "branch": "main"},
-        "subjects": {"demo": {"configTemplate": str(control)}},
+        "runsRoot": runs_root, "profiles": {"fake": "fixture-profile"},
     }
     environment_path = control / "environment.json"
     write(environment_path, json.dumps(environment))
-    sha = "a" * 64
+    trees = {
+        variant: git_value(source, "rev-parse", "HEAD:experiments/demo/variants/%s/source" % variant)
+        for variant in ("v1", "v2")
+    }
     declaration = {
-        "cycle": "wsl-materialize", "experiment": "demo", "kind": "measurement",
-        "subjects": ["demo"], "workloadHash": sha, "measurementHash": sha,
-        "judgeHash": sha, "sessionContractHash": sha, "executionUnitHash": sha,
+        "schemaVersion": 1, "cycle": "wsl-materialize", "experiment": "demo",
+        "subjects": ["fake"],
+        "workload": {
+            "path": "experiments/demo/workload.md",
+            "sha256": hashlib.sha256((experiment / "workload.md").read_bytes()).hexdigest(),
+        },
+        "evaluation": {
+            "path": "experiments/demo/evaluate.py",
+            "sha256": hashlib.sha256((experiment / "evaluate.py").read_bytes()).hexdigest(),
+        },
         "base": {"repo": str(base), "commit": base_commit},
         "arms": [
-            {"id": "control", "role": "control", "variant": "v1", "variantTree": trees["v1"]},
-            {"id": "treatment", "role": "treatment", "variant": "v2", "variantTree": trees["v2"]},
+            {
+                "id": "control", "role": "control", "variant": "v1",
+                "variantTree": trees["v1"],
+                "variantDigest": cycle.managed_digest(str(experiment / "variants" / "v1" / "source")),
+            },
+            {
+                "id": "treatment", "role": "treatment", "variant": "v2",
+                "variantTree": trees["v2"],
+                "variantDigest": cycle.managed_digest(str(experiment / "variants" / "v2" / "source")),
+            },
         ],
     }
     write(cycles / "wsl-materialize.json", json.dumps(declaration))
 
-    old = cycle.CYCLES_DIR, cycle.SUBJECTS_DIR
+    old_dirs = cycle.CYCLES_DIR, cycle.SUBJECTS_DIR
     cycle.CYCLES_DIR, cycle.SUBJECTS_DIR = str(cycles), str(subjects)
-    cycle._subject_cache.clear()
     cycle.configure_environment(str(environment_path))
-    release = cycle.exec_("realpath -m \"$HOME/releases/wsl-materialize\"").strip()
-    if not release.startswith("/") or not release.endswith("/releases/wsl-materialize"):
-        raise AssertionError("unexpected WSL fixture release path: %r" % release)
-    cleanup = "rm -rf -- %s" % shlex.quote(release)
-    cycle.exec_(cleanup)
+    cycle.exec_("rm -rf -- %s" % runs_root)
     try:
         cycle.materialize("wsl-materialize")
-        output = cycle.exec_(
-            "sha256sum $HOME/releases/wsl-materialize/{control,treatment}/.rules/demo.txt"
-        )
-        expected = hashlib.sha256(b"same-result\n").hexdigest()
-        assert [line.split()[0] for line in output.splitlines()] == [expected, expected]
+        output = cycle.exec_("sha256sum %s/wsl-materialize/{control,treatment}/.rules/demo.txt" % runs_root)
+        expected = [hashlib.sha256(body).hexdigest() for body in (b"old\n", b"new\n")]
+        assert [line.split()[0] for line in output.splitlines()] == expected
     finally:
-        cycle.exec_(cleanup)
-        cycle.CYCLES_DIR, cycle.SUBJECTS_DIR = old
+        cycle.exec_("rm -rf -- %s" % runs_root)
+        cycle.CYCLES_DIR, cycle.SUBJECTS_DIR = old_dirs
 
 print("WSL materialization fixture: ok")

@@ -5,10 +5,8 @@
     "root": "<stable-rule-source-repository>",
     "branch": "main"
   },
-  "subjects": {
-    "claude-code": {
-      "configTemplate": "<private-authenticated-config-template>",
-      "credentialStore": "<private-authenticated-credential-store>"
-    }
+  "runsRoot": "runs",
+  "profiles": {
+    "example": "<opaque-adapter-profile>"
   }
 }

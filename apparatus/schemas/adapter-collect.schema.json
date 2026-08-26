@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/apparatus/adapter-collect.schema.json",
+  "title": "Subject adapter collect response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "adapterIdentity", "success", "ruleLoaded", "evidence"],
+  "properties": {
+    "protocolVersion": { "const": 1 },
+    "adapterIdentity": { "$ref": "#/$defs/sha256" },
+    "success": { "type": "boolean" },
+    "ruleLoaded": { "type": "boolean" },
+    "evidence": {
+      "type": "array", "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

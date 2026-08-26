@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/apparatus/review.schema.json",
+  "title": "Measurement review record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "cycle", "recordedAt", "declarationSha256", "baseCommit",
+    "workloadSha256", "evaluationSha256", "arms", "verdict", "reasons", "treatmentDigest"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "cycle": { "$ref": "#/$defs/identifier" },
+    "recordedAt": { "$ref": "#/$defs/timestamp" },
+    "declarationSha256": { "$ref": "#/$defs/sha256" },
+    "baseCommit": { "$ref": "#/$defs/gitObject" },
+    "workloadSha256": { "$ref": "#/$defs/sha256" },
+    "evaluationSha256": { "$ref": "#/$defs/sha256" },
+    "arms": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "contains": {
+        "type": "object", "required": ["role"],
+        "properties": { "role": { "const": "control" } }
+      },
+      "minContains": 1, "maxContains": 1,
+      "items": { "$ref": "#/$defs/arm" }
+    },
+    "verdict": { "enum": ["promote", "reject"] },
+    "reasons": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "treatmentDigest": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitObject": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "subject": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "adapterIdentity", "adapterResponseDigest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "adapterIdentity": { "$ref": "#/$defs/sha256" },
+        "adapterResponseDigest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "criterion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["criterion", "text", "result", "evidence"],
+      "properties": {
+        "criterion": { "type": "integer", "minimum": 1 },
+        "text": { "type": "string", "minLength": 1 },
+        "result": { "enum": ["met", "not-met", "unknown"] },
+        "evidence": { "type": "string", "minLength": 1 }
+      }
+    },
+    "arm": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "role", "variant", "variantTree", "variantDigest", "subjects", "criteria"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "role": { "enum": ["control", "treatment"] },
+        "variant": { "$ref": "#/$defs/identifier" },
+        "variantTree": { "$ref": "#/$defs/gitObject" },
+        "variantDigest": { "$ref": "#/$defs/sha256" },
+        "subjects": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/subject" } },
+        "criteria": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/criterion" } }
+      }
+    }
+  }
+}

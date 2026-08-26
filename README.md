@@ -1,35 +1,28 @@
-# Rule Experiment Apparatus
+# Rule experiment apparatus
 
-`apparatus/cycle.py` is the single public apparatus for materializing, handing off, judging,
-promoting, rolling back, freezing, and estimating agent-rule experiments. Runtime records,
-authenticated config templates, private paths, and credentials stay outside this repository.
+Agent rule の変更だけを control / treatment 間で変え、行動差を計測する最小の装置です。
+評価した treatment bytes と同じ bytes だけを stable baseline へ反映できます。
 
-```console
-python3 -m pip install -r apparatus/requirements.txt
-python3 apparatus/cycle.py --selfcheck
-python3 apparatus/tests/test_cycle.py
-```
+公開操作は `materialize`、`review`、`promote`、`rollback` の4つです。CLI 固有の設定、
+認証、起動、rule 配置、実行証拠の収集は versioned subject adapter が所有し、core は
+adapter の JSON protocol と digest だけを扱います。
 
-Normal commands require `--environment <private-environment.json>`.
+## Documents
 
-## Documentation
-
-| Document | Purpose |
-|---|---|
-| [`CONSTITUTION.md`](CONSTITUTION.md) | Purpose and invariants |
-| [`TERMS.md`](TERMS.md) | Canonical vocabulary |
-| [`docs/IMPROVEMENT-POLICY.md`](docs/IMPROVEMENT-POLICY.md) | Core boundary and improvement rule |
-| [`docs/RULE-EXPERIMENT.md`](docs/RULE-EXPERIMENT.md) | Experiment protocol |
-| [`docs/EXECUTION-UNIT.md`](docs/EXECUTION-UNIT.md) | Session ownership and provenance |
-| [`docs/ARM-SCOPE.md`](docs/ARM-SCOPE.md) | Workload scope |
-| [`docs/SETUP-GUIDE.md`](docs/SETUP-GUIDE.md) | Private setup |
-| [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) | Operator workflow |
+- [Constitution](CONSTITUTION.md)
+- [Terms](TERMS.md)
+- [Protocol and records](docs/RULE-EXPERIMENT.md)
+- [Setup guide](docs/SETUP-GUIDE.md)
+- [Operator guide](docs/USER-GUIDE.md)
 
 ### Historical
 
-Historical records remain in private control repositories and Git history; no legacy runtime is
-shipped here.
+現行 tree に履歴文書は置きません。完了した変更の記録は Git history が持ちます。
 
-## License
+## Checks
 
-MIT. See `LICENSE`.
+```console
+python3 apparatus/docs_check.py
+python3 apparatus/cycle.py --selfcheck
+python3 apparatus/tests/test_cycle.py
+```

@@ -1,86 +1,19 @@
-# TERMS — 正規用語集
+# Terms
 
-この文書が**用語の正本**である。[`CONSTITUTION.md`](CONSTITUTION.md) はこの文書へ
-用語の権威を委譲しており、本文・関連文書・新設する文書は、ここにある概念を
-別の語で言い換えない。
-
-この文書は用語の意味だけを定める。**原則そのものは憲法にあり、この文書は原則を
-足したり緩めたりしない。** 原則を成立させる具体的な方法は
-[`docs/RULE-EXPERIMENT.md`](docs/RULE-EXPERIMENT.md)、操作手順は
-[`docs/USER-GUIDE.md`](docs/USER-GUIDE.md)。
-
----
-
-## 実験の単位
-
-実験の単位は次の階層で数える。
-
-```text
-実験 (experiment)          測りたい1つの問い。例: GUI 確認ルール
- └ サイクル (cycle)        1回の比較。変えてよい比較キーは1要素（憲法 不変条件 1）
-    └ アーム (arm)         比較の1条件。対照アームと処置アーム
-       └ 実行 (execution)  所属基準で定まるセッションの集合
-```
-
-### 実験の概念
-
-| 語 | 定義 |
+| Term | Meaning |
 |---|---|
-| 実験 | 測りたい1つの問い。複数のサイクルを持ちうる。marker の `<experiment>` |
-| サイクル | 1回の比較。変えてよい比較キーは1要素（憲法 不変条件 1）。2要素以上動いたら別実験 |
-| アーム | 比較の1条件。計測サイクルは対照1件・処置1件、推定サイクルは1件 |
-| 実行 | 所属基準で定まるセッションの集合。開始時点に定まるのは所属の基準だけであり、セッションの列挙は judge 時に行う |
-| 所属基準 | あるセッションがそのアームの実行に属するかを決める規則。正本は実行単位規則。版は宣言の `executionUnitHash` |
-| 参加セッション | subject が実際に何かを実行したセッション。起動しただけのものは含まない。判定形式は subject 記述子が持つ |
-| 実行単位規則 | 所属基準の正本。実験非依存。置き場は `docs/EXECUTION-UNIT.md` |
-| base | 全アームが共有する workload 対象 repository commit。固定の対象ではない |
-| baseline | 検証済みの stable rule-source tree。以後の変種候補の基準 |
-| 対照アーム | baseline のルール源を使うアーム |
-| 変種（variant） | baseline 候補となる完全な rule-source tree。`variants/<id>/source/` に置く |
-| 比較キー | サイクル間の比較可能性を決める要素の組。構成は憲法 不変条件 1 が列挙する |
-| 実験メタ情報の可読性 | アームに存在する実験メタ情報の集合と内容。憲法 不変条件 1 と 8 が比較キーとして指すもの |
-| 宣言 | 比較キーの各要素と、前提条件を確立する操作の結果を機械可読に残した正本。照合の入力 |
-| 照合 | 宣言と実状態の機械突き合わせ。不一致は修復せず、そのサイクルを比較から外す。修復はサイクル外の、前提条件を確立する操作として行う |
-| 計測仕様 | 実験ごとの計測定義の正本（`MEASUREMENT.md`）。計測定義と計測結果は逐語1:1で対応する |
-| 記録 | 計測ログ。結果の本体はここに残る（機構上は `reviews/*.json`） |
-| 推定 | 再実行が非現実的な workload の1実行の凍結入力に推定器を当て、変種の効果を見積もる操作（`CONSTITUTION.md` §1）。結果は計測ではない |
-| 推定器 | 推定を行う道具（LLM・統計・ヒューリスティック等）。装置へ焼き込まず、identity（内容から決まる識別子。構成は `docs/RULE-EXPERIMENT.md`）で識別する（憲法 不変条件 10） |
-| 凍結入力 | 推定の入力として hash 付きで束ねた実行痕跡一式（束の構成は `docs/RULE-EXPERIMENT.md`）。推定器はこれ以外を読まない（憲法 不変条件 10） |
-| 推定記録 | 推定結果の正本。記録（計測ログ）とは別置し、推定器 identity と凍結入力の hash を必ず持つ（憲法 不変条件 10。形式は `docs/RULE-EXPERIMENT.md`） |
-| 較正 | 計測済みサイクルを正解データとして推定器の信頼性を確認する、前提条件を確立する操作（`CONSTITUTION.md` §1）。未較正の推定器は使わない |
-| marker | `loaded` 判定用に全変種共通で1回出させる文字列 `[<experiment>:<variant>]`。憲法 不変条件 2 の唯一の例外 |
-| 配置経路 | 変種を置く先。subject ごとに実証済みの集合が異なる（憲法 不変条件 4） |
-| 常時適用経路 | subject が常時適用ルールを読み込む経路（憲法 不変条件 8） |
-| 被験体 | workload が作用する対象物（アプリ、または装置自身）。subject（被験主体）とは別物 |
-
-### 主体
-
-| 語 | 定義 |
-|---|---|
-| `controller` | 変種 / workload / 計測 / 記録 / 状態遷移を扱う装置側の主体 |
-| `subject` | 注入済み変種の下で逐語の `workload.md` だけを実行する被験主体。1つのアームを複数の subject が触ってよい。各種別と隔離先（config root）で識別する |
-| `provisioner` | 前提条件を確立する操作（`CONSTITUTION.md` §1）を行う主体。controller でも subject でもない |
-
-### 操作の語
-
-| 語 | 意味 |
-|---|---|
-| `materialize` | 同一 base からアームを作り、選択 subject の実証済み経路へ rule source を描画する |
-| `promote` | **固定**。検証済み variant source の managed subset を baseline へ反映する |
-| `rollback` | 最新の固定を取り消し、直前の managed digest を復元する |
-| `reviews/*.json` | 記録（計測ログ） |
-| `successCriteria` / `criteriaResults` | 計測定義と計測結果。逐語1:1が機械強制される |
-| `workload.md` | 実行へ渡す不変の作業指示（憲法 不変条件 7） |
-| handoff | アームの target と subject identity が宣言どおりであることを照合してから人へ渡す境界（憲法 不変条件 9） |
-| `proven` | その subject の配置経路が実証済みであること。marker の実出で確認してから付く（憲法 不変条件 4） |
-
-### 用語の規律
-
-- **「固定」は promote の意味に限る。** 値や文書を変えずに保つ意味では「不変に保つ」、
-  手段を機構へ埋め込む意味では「焼き込む」、依存の版を留める意味では「ピン留め」と書く
-- **計測に関する語は「計測」に統一する**（計測定義・計測結果・計測仕様・計測ログ）。
-  「観測」「測定」を同義語として使わない
-- **推定結果を「計測」と呼ばない。** 記録（計測ログ）へ推定を書かず、推定記録へ
-  計測を書かない。対照アームつきの比較から得たものだけが計測である
-- **「経路」は単独で使わない。** 変種を置く配置経路（憲法 不変条件 4）と、常時適用ルールが
-  載る常時適用経路（憲法 不変条件 8）を区別する
+| experiment | 測りたい1つの問い |
+| cycle | 同じ固定入力から作る1回の control / treatment 比較 |
+| arm | 比較の1条件。control 1件と treatment 1件 |
+| base | 両 arm が共有する workload repository commit |
+| baseline | 検証済みの stable rule-source tree |
+| variant | baseline 候補となる完全な managed rule-source bytes |
+| declaration | base、workload、evaluation、subject、variant identity を固定する JSON |
+| subject | 注入済み variant の下で workload を実行する被験主体 |
+| adapter | subject 固有の環境と証拠を core protocol へ変換する versioned program |
+| profile | adapter だけが解釈する environment 固有の opaque reference |
+| review | declaration、adapter 応答 digest、evaluation、verdict を統合した唯一の計測記録 |
+| `materialize` | base から2 arm を作り、各 adapter の `prepare` を呼ぶ |
+| `review` | 各 adapter の `collect` と固定 evaluation を実行し、review record を作る |
+| `promote` | 評価済み treatment bytes を baseline へ反映する |
+| `rollback` | 最新 promotion commit を revert し、直前の managed digest を復元する |

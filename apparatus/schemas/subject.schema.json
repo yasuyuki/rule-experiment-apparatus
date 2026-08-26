@@ -1,78 +1,28 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/apparatus/subject.schema.json",
-  "title": "Subject descriptor",
+  "title": "Versioned subject adapter descriptor",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "id", "tool", "isolationEnv", "versionCommand", "binary", "markerFile",
-    "credentialPaths", "workspacePlacement", "keepEmpty", "transcripts"
-  ],
+  "required": ["id", "protocolVersion", "adapter", "profileRef"],
   "properties": {
     "id": { "$ref": "#/$defs/identifier" },
-    "tool": { "$ref": "#/$defs/identifier" },
-    "isolationEnv": { "type": "string", "minLength": 1 },
-    "versionCommand": { "type": "string", "minLength": 1 },
-    "binary": { "type": "string", "minLength": 1 },
-    "markerFile": {
-      "oneOf": [
-        { "type": "string", "minLength": 1, "pattern": "^[^/]" },
-        { "type": "null" }
-      ]
+    "protocolVersion": { "const": 1 },
+    "adapter": {
+      "type": "object", "additionalProperties": false,
+      "required": ["entrypoint", "sha256"],
+      "properties": {
+        "entrypoint": { "type": "string", "minLength": 1, "pattern": "^[^\\\\]+$" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
     },
-    "credentialPaths": {
-      "type": "array", "minItems": 0, "uniqueItems": true,
-      "items": { "type": "string", "minLength": 1, "pattern": "^[^/]" }
-    },
-    "workspacePlacement": { "$ref": "#/$defs/placementList" },
-    "keepEmpty": {
-      "type": "array", "uniqueItems": true,
-      "items": { "type": "string", "minLength": 1, "pattern": "^[^/]" }
-    },
-    "transcripts": {
-      "oneOf": [
-        {
-          "type": "object", "additionalProperties": false,
-          "required": ["glob", "armBinding", "participation"],
-          "properties": {
-            "glob": { "type": "string", "minLength": 1 },
-            "searchRoot": { "enum": ["config-root", "home-cursor"] },
-            "armBinding": { "enum": ["project-slug", "session-meta-cwd", "cursor-project-slug"] },
-            "participation": {
-              "oneOf": [
-                { "$ref": "#/$defs/predicate" },
-                {
-                  "type": "object", "additionalProperties": false, "required": ["all"],
-                  "properties": {
-                    "all": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/predicate" } }
-                  }
-                }
-              ]
-            }
-          }
-        },
-        { "type": "null" }
-      ]
-    }
+    "profileRef": { "$ref": "#/$defs/identifier" }
   },
   "$defs": {
-    "identifier": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "not": { "enum": [".", ".."] } },
-    "placementList": {
-      "type": "array", "minItems": 1,
-      "items": {
-        "type": "object", "additionalProperties": false, "required": ["path", "proven"],
-        "properties": {
-          "path": { "type": "string", "minLength": 1 },
-          "proven": { "type": "boolean" }
-        }
-      }
+    "identifier": {
+      "type": "string", "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]+$", "not": { "enum": [".", ".."] }
     },
-    "predicate": {
-      "type": "object", "additionalProperties": false, "required": ["jsonlField", "equals"],
-      "properties": {
-        "jsonlField": { "type": "string", "minLength": 1 },
-        "equals": { "type": "string", "minLength": 1 }
-      }
-    }
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
   }
 }
