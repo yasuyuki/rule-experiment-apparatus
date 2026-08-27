@@ -35,6 +35,13 @@ sanitized evidence reference を所有します。
 8. baseline を直接変更せず、状態遷移を `promote` と最新 promotion の `rollback` に限る。
 9. 失敗した cycle は後編集せず、修正した declaration で新しい cycle を作る。
 
+## Accepted risk
+
+subject を実行する harness、すなわち agent CLI の version は Invariant 1 の一致対象に
+含めません。harness version の固定は運用上現実的でないため、control / treatment arm 間の
+version 差、および cycle 実行中の version drift を、比較の妥当性に対する残存リスクとして
+受容します。
+
 ## Necessity gate
 
 機能、schema、文書、test は、それを削除すると purpose が未達または未証明になる場合だけ
