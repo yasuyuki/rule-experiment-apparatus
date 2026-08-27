@@ -40,7 +40,9 @@ sanitized evidence reference を所有します。
 subject を実行する harness、すなわち agent CLI の version は Invariant 1 の一致対象に
 含めません。harness version の固定は運用上現実的でないため、control / treatment arm 間の
 version 差、および cycle 実行中の version drift を、比較の妥当性に対する残存リスクとして
-受容します。
+受容します。version を取得できたときは review record に記録するにとどめ、検出の成否を
+cycle の verdict や `promote` の条件にはしません。version を取得・比較できないことは
+欠陥ではありません。
 
 ## Necessity gate
 
