@@ -7,7 +7,7 @@ Python 3.10+、Git、Bash と `apparatus/requirements.txt` の依存を用意し
 
 - `variantSourceRoot`: versioned experiment source repository
 - `stableRules.root` / `stableRules.branch`: stable rule-source repository と branch
-- `runsRoot`: executor が書き込める arm root
+- `runsRoot`: executor が書き込める arm root。WSL では absolute path または `~/...`
 - `profiles`: subject descriptor の `profileRef` から adapter 固有の opaque value への map
 
 Subject descriptor と同じ directory に adapter entrypoint を置き、その SHA-256 を descriptor に

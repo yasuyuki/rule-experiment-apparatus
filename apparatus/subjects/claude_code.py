@@ -83,8 +83,9 @@ def profile(raw):
     if not all(isinstance(value[key], str) and value[key] for key in required):
         raise SystemExit("Claude adapter profile values must be non-empty strings")
     for key in ("binary", "configTemplate", "credentialStore"):
+        value[key] = os.path.expanduser(value[key])
         if not os.path.isabs(value[key]):
-            raise SystemExit("Claude adapter profile %s must be absolute" % key)
+            raise SystemExit("Claude adapter profile %s must be absolute or home-relative" % key)
     return value
 
 

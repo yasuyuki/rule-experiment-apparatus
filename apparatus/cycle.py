@@ -134,8 +134,11 @@ def to_executor_path(path):
 def runs_root():
     value = load_environment()["runsRoot"]
     if load_environment()["executor"]["kind"] == "wsl":
+        if value.startswith("~/"):
+            home = run_executor(["bash", "-lc", 'printf "%s" "$HOME"']).stdout.strip()
+            value = home + value[1:]
         if not value.startswith("/"):
-            raise SystemExit("runsRoot must be an absolute executor path for WSL")
+            raise SystemExit("runsRoot must be an absolute or home-relative executor path for WSL")
         return value.rstrip("/")
     return resolve_control_path(value).replace("\\", "/").rstrip("/")
 
