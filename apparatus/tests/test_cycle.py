@@ -117,7 +117,7 @@ print(json.dumps({"arms": arms}))
 with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
     temp = Path(raw)
     control, source, stable, base = (temp / name for name in ("control", "source", "stable", "base"))
-    subjects, cycles, runs = (temp / name for name in ("subjects", "cycles", "runs"))
+    subjects, cycles, runs = temp / "subjects", control / "cycles", temp / "runs"
     for path in (control, subjects, cycles, runs):
         path.mkdir(parents=True)
 
@@ -193,8 +193,9 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
 
     write(cycles / "fixture.json", json.dumps(declaration("fixture")))
     old_dirs = cycle.CYCLES_DIR, cycle.SUBJECTS_DIR
-    cycle.CYCLES_DIR, cycle.SUBJECTS_DIR = str(cycles), str(subjects)
     cycle.configure_environment(str(environment_path))
+    assert Path(cycle.CYCLES_DIR) == cycles
+    cycle.SUBJECTS_DIR = str(subjects)
     try:
         assert_schema(environment, "environment.schema.json")
         assert_schema(descriptor, "subject.schema.json")

@@ -29,11 +29,12 @@ _subject_cache = {}
 
 
 def configure_environment(path):
-    global ENVIRONMENT_PATH, CONTROL_DIR, _environment_cache
+    global ENVIRONMENT_PATH, CONTROL_DIR, CYCLES_DIR, _environment_cache
     if not path:
         raise SystemExit("--environment is required")
     ENVIRONMENT_PATH = os.path.abspath(path)
     CONTROL_DIR = os.path.dirname(ENVIRONMENT_PATH)
+    CYCLES_DIR = os.path.join(CONTROL_DIR, "cycles")
     _environment_cache = None
     _subject_cache.clear()
 

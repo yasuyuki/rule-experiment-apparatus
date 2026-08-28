@@ -1,7 +1,7 @@
 # Operator guide
 
 Version control 下の experiment source に workload、evaluation、control / treatment variant source を
-置きます。Ignored な `apparatus/cycles/<cycle>.json` に exact Git tree と SHA-256 を固定します。
+置きます。Private control repository の `cycles/<cycle>.json` に exact Git tree と SHA-256 を固定します。
 
 ```console
 python3 apparatus/cycle.py --environment <environment.json> materialize --cycle <cycle>

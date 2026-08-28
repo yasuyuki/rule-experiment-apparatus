@@ -1,0 +1,9 @@
+{
+  "id": "claude-code",
+  "protocolVersion": 1,
+  "adapter": {
+    "entrypoint": "claude_code.py",
+    "sha256": "1a708af932c0aa08657f9e64a629fb60cf3e667ed8ed0f9039947da18fe7856b"
+  },
+  "profileRef": "claude-code"
+}
