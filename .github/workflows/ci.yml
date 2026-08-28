@@ -22,6 +22,7 @@ jobs:
           git config --global user.email fixture@example.invalid
       - run: python apparatus/docs_check.py
       - run: python apparatus/cycle.py --environment apparatus/schemas/environment.example.json --selfcheck
+      - run: python apparatus/tests/test_claude_code_adapter.py
       - run: python apparatus/tests/test_cycle.py
 
   wsl-executor:

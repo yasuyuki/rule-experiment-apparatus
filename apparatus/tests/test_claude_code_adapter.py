@@ -15,8 +15,8 @@ claude_code = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(claude_code)
 
 
-def run(*args, cwd=None, stdin=None):
-    return subprocess.run(args, cwd=cwd, input=stdin, check=True, capture_output=True,
+def run(*args, cwd=None, stdin=None, check=True):
+    return subprocess.run(args, cwd=cwd, input=stdin, check=check, capture_output=True,
                           text=True, encoding="utf-8")
 
 
@@ -53,16 +53,32 @@ with tempfile.TemporaryDirectory(prefix="claude-adapter-") as raw:
         "tools": {"claude": {"path": ".claude/rules/agent-rules--{id}.md"}}
     }))
 
-    template, store = temp / "template", temp / "store"
+    template = temp / "template"
     write(template / "settings.json", "{}\n")
+    credential_sources = {}
     for name in claude_code.CREDENTIALS:
-        write(store / name, "credential\n")
+        source = temp / ("source-" + name.lstrip("."))
+        write(source, "credential\n")
+        credential_sources[name] = str(source)
+    auth_status = temp / "auth-status.json"
+    write(auth_status, json.dumps({
+        "loggedIn": True, "authMethod": "claude.ai", "subscriptionType": "fixture",
+    }))
+    os.environ["FIXTURE_AUTH_STATUS"] = str(auth_status)
     binary = temp / "claude"
-    write(binary, "#!/bin/sh\necho 'fixture Claude'\n")
+    write(binary, '''#!/bin/sh
+if [ "$1" = "--version" ]; then
+    echo 'fixture Claude'
+elif [ "$1 $2 $3" = "auth status --json" ]; then
+    cat "$FIXTURE_AUTH_STATUS"
+else
+    exit 2
+fi
+''')
     binary.chmod(0o755)
     profile = json.dumps({
         "binary": str(binary), "configTemplate": str(template),
-        "credentialStore": str(store), "launchPrefix": "launcher",
+        "credentialSources": credential_sources, "launchPrefix": "launcher",
     })
     digest = claude_code.managed_digest(str(variant))
 
@@ -98,6 +114,7 @@ with tempfile.TemporaryDirectory(prefix="claude-adapter-") as raw:
         for name in claude_code.CREDENTIALS:
             path = config / name
             assert path.is_symlink()
+            assert path.resolve() == Path(credential_sources[name]).resolve()
             assert path.read_text(encoding="utf-8") == "credential\n"
 
     commit(workspace_a, "variant injection")
@@ -123,6 +140,31 @@ with tempfile.TemporaryDirectory(prefix="claude-adapter-") as raw:
     assert collected["ruleLoaded"] is True
     evidence = json.loads(collected["evidence"][0])
     assert evidence["phaseDocuments"][".claude/plan-phases/fixture/phase-01.md"].startswith("```console")
-    assert not any(str(store) in item for item in collected["evidence"])
+    assert not any(str(temp) in item for item in collected["evidence"])
+
+    settings = claude_code.profile(profile)
+    for invalid in (
+        {"loggedIn": False, "authMethod": "claude.ai", "subscriptionType": "fixture"},
+        {"loggedIn": True, "authMethod": "apiKey", "subscriptionType": None},
+        "not-json",
+    ):
+        write(auth_status, invalid if isinstance(invalid, str) else json.dumps(invalid))
+        try:
+            claude_code.verify_subscription(settings, str(config_b))
+        except SystemExit as error:
+            assert str(error) == "Claude subscription authentication is unavailable"
+        else:
+            raise AssertionError("invalid authentication passed")
+
+    broken = config_a / ".credentials.json"
+    broken.unlink()
+    write(broken, "credential\n")
+    failed = run(sys.executable, str(ADAPTER), "collect", check=False, stdin=json.dumps({
+        "protocolVersion": 1, "cycle": "fixture", "arm": "arm-a",
+        "workspace": str(workspace_a), "profile": profile, "token": prepared_a["token"],
+    }))
+    assert failed.returncode != 0
+    assert "Claude credential link changed: .credentials.json" in failed.stderr
+    assert not any(source in failed.stderr for source in credential_sources.values())
 
 print("claude adapter fixture: ok")

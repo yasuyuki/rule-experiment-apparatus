@@ -77,21 +77,34 @@ def profile(raw):
         value = json.loads(raw)
     except (TypeError, ValueError) as error:
         raise SystemExit("invalid Claude adapter profile: %s" % error)
-    required = {"binary", "configTemplate", "credentialStore", "launchPrefix"}
+    required = {"binary", "configTemplate", "credentialSources", "launchPrefix"}
     if not isinstance(value, dict) or set(value) != required:
         raise SystemExit("Claude adapter profile must contain only %s" % ", ".join(sorted(required)))
-    if not all(isinstance(value[key], str) and value[key] for key in required):
+    if not all(
+        isinstance(value[key], str) and value[key]
+        for key in ("binary", "configTemplate", "launchPrefix")
+    ):
         raise SystemExit("Claude adapter profile values must be non-empty strings")
-    for key in ("binary", "configTemplate", "credentialStore"):
+    sources = value["credentialSources"]
+    if (
+        not isinstance(sources, dict) or set(sources) != set(CREDENTIALS)
+        or not all(isinstance(sources[name], str) and sources[name] for name in CREDENTIALS)
+    ):
+        raise SystemExit("Claude adapter credentialSources must contain only %s" % ", ".join(CREDENTIALS))
+    for key in ("binary", "configTemplate"):
         value[key] = os.path.expanduser(value[key])
         if not os.path.isabs(value[key]):
             raise SystemExit("Claude adapter profile %s must be absolute or home-relative" % key)
+    for name in CREDENTIALS:
+        sources[name] = os.path.expanduser(sources[name])
+        if not os.path.isabs(sources[name]):
+            raise SystemExit("Claude adapter credential source %s must be absolute or home-relative" % name)
     return value
 
 
-def run(argv, cwd=None, check=True):
+def run(argv, cwd=None, check=True, env=None):
     result = subprocess.run(argv, cwd=cwd, text=True, capture_output=True,
-                            encoding="utf-8", errors="replace")
+                            encoding="utf-8", errors="replace", env=env)
     if check and result.returncode:
         raise SystemExit("%s failed: %s" % (" ".join(argv), result.stderr.strip()))
     return result
@@ -122,6 +135,28 @@ def placements(workspace):
     return output
 
 
+def verify_credential_links(config_root, sources):
+    for name in CREDENTIALS:
+        path = os.path.join(config_root, name)
+        if not os.path.islink(path) or os.readlink(path) != sources[name]:
+            raise SystemExit("Claude credential link changed: %s" % name)
+
+
+def verify_subscription(settings, config_root):
+    environment = os.environ.copy()
+    environment["CLAUDE_CONFIG_DIR"] = config_root
+    result = run([settings["binary"], "auth", "status", "--json"], check=False, env=environment)
+    try:
+        status = json.loads(result.stdout) if result.returncode == 0 else None
+    except ValueError:
+        status = None
+    if (
+        not isinstance(status, dict) or status.get("loggedIn") is not True
+        or status.get("authMethod") != "claude.ai" or not status.get("subscriptionType")
+    ):
+        raise SystemExit("Claude subscription authentication is unavailable")
+
+
 def prepare(payload, identity):
     settings = profile(payload["profile"])
     workspace = payload["workspace"]
@@ -137,10 +172,13 @@ def prepare(payload, identity):
         ignore=shutil.ignore_patterns(*CREDENTIALS, "projects", "sessions"),
     )
     for name in CREDENTIALS:
-        source = os.path.join(settings["credentialStore"], name)
+        source = settings["credentialSources"][name]
         if not os.path.exists(source):
             raise SystemExit("credential source is missing: %s" % name)
         os.symlink(source, os.path.join(config_root, name))
+    verify_credential_links(config_root, settings["credentialSources"])
+    verify_subscription(settings, config_root)
+    verify_credential_links(config_root, settings["credentialSources"])
 
     renderer(variant, "render", workspace)
     marker = "[rule-experiment-loaded:%s]" % payload["cycle"]
@@ -231,6 +269,8 @@ def collect(payload, identity):
     if payload["workspace"] != token.get("workspace"):
         raise SystemExit("workspace differs from prepare token")
     workspace, config_root = token["workspace"], token["configRoot"]
+    settings = profile(payload["profile"])
+    verify_credential_links(config_root, settings["credentialSources"])
     sessions, assistants, markers, documents = transcript_evidence(
         config_root, workspace, token["marker"]
     )
