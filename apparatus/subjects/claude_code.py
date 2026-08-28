@@ -147,7 +147,7 @@ def prepare(payload, identity):
     probe = os.path.join(workspace, ".claude", "rules", "apparatus-probe.md")
     os.makedirs(os.path.dirname(probe), exist_ok=True)
     with open(probe, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write("# Apparatus probe\n\n最初の応答の冒頭に `%s` を1回出力する。\n" % marker)
+        handle.write("# Apparatus probe\n\nこのセッション中の応答のどれかに `%s` を1回以上出力する。\n" % marker)
     renderer(variant, "verify", workspace)
 
     version = run([settings["binary"], "--version"], check=False)
