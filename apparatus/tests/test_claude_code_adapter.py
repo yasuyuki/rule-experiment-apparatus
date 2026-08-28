@@ -55,11 +55,16 @@ with tempfile.TemporaryDirectory(prefix="claude-adapter-") as raw:
 
     template = temp / "template"
     write(template / "settings.json", "{}\n")
-    credential_sources = {}
+    bridge = temp / "credential-sources"
+    bridge.mkdir()
+    credential_sources, native_sources = {}, {}
     for name in claude_code.CREDENTIALS:
         source = temp / ("source-" + name.lstrip("."))
         write(source, "credential\n")
-        credential_sources[name] = str(source)
+        link = bridge / name
+        link.symlink_to(source)
+        credential_sources[name] = str(link)
+        native_sources[name] = str(source)
     auth_status = temp / "auth-status.json"
     write(auth_status, json.dumps({
         "loggedIn": True, "authMethod": "claude.ai", "subscriptionType": "fixture",
@@ -114,7 +119,8 @@ fi
         for name in claude_code.CREDENTIALS:
             path = config / name
             assert path.is_symlink()
-            assert path.resolve() == Path(credential_sources[name]).resolve()
+            assert path.resolve() == Path(native_sources[name]).resolve()
+            assert os.readlink(path) == native_sources[name]
             assert path.read_text(encoding="utf-8") == "credential\n"
 
     commit(workspace_a, "variant injection")
@@ -165,6 +171,6 @@ fi
     }))
     assert failed.returncode != 0
     assert "Claude credential link changed: .credentials.json" in failed.stderr
-    assert not any(source in failed.stderr for source in credential_sources.values())
+    assert not any(source in failed.stderr for source in native_sources.values())
 
 print("claude adapter fixture: ok")

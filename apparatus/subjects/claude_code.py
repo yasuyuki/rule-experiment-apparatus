@@ -99,6 +99,7 @@ def profile(raw):
         sources[name] = os.path.expanduser(sources[name])
         if not os.path.isabs(sources[name]):
             raise SystemExit("Claude adapter credential source %s must be absolute or home-relative" % name)
+        sources[name] = os.path.realpath(sources[name])
     return value
 
 
