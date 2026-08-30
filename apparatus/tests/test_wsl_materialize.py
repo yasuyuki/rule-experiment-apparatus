@@ -67,9 +67,12 @@ print(json.dumps({
 
 with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
     temp = Path(raw)
-    control, source, base, subjects, cycles = (temp / name for name in (
-        "control", "source", "base", "subjects", "cycles"
+    control, source, base, subjects = (temp / name for name in (
+        "control", "source", "base", "subjects"
     ))
+    # 宣言は control repository の中にある。configure_environment が CYCLES_DIR を
+    # そこへ向けるので、外に置いた directory を指しても上書きされる。
+    cycles = control / "cycles"
     for path in (control, subjects, cycles):
         path.mkdir(parents=True)
 
@@ -142,8 +145,9 @@ with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
     write(cycles / "wsl-materialize.json", json.dumps(declaration))
 
     old_dirs = cycle.CYCLES_DIR, cycle.SUBJECTS_DIR
-    cycle.CYCLES_DIR, cycle.SUBJECTS_DIR = str(cycles), str(subjects)
     cycle.configure_environment(str(environment_path))
+    assert Path(cycle.CYCLES_DIR) == cycles
+    cycle.SUBJECTS_DIR = str(subjects)
     cycle.exec_("rm -rf -- %s" % runs_root)
     try:
         cycle.materialize("wsl-materialize")
