@@ -7,6 +7,9 @@ import subprocess
 import tempfile
 
 
+if os.name != "posix":
+    raise SystemExit("test_cycle.py requires a POSIX host; it drives the local-posix executor")
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("cycle", ROOT / "apparatus" / "cycle.py")
 cycle = importlib.util.module_from_spec(SPEC)

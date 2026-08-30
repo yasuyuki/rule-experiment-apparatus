@@ -22,8 +22,23 @@ adapter の JSON protocol と digest だけを扱います。
 
 ## Checks
 
+検査ごとに走らせる host が違います。最初の2つはどちらの host でも走ります。
+
 ```console
 python3 apparatus/docs_check.py
 python3 apparatus/cycle.py --selfcheck
+```
+
+次の2つは local-posix executor と実行ビット付きの fixture を使うので POSIX host が要ります。
+
+```console
 python3 apparatus/tests/test_cycle.py
+python3 apparatus/tests/test_claude_code_adapter.py
+```
+
+`apparatus/tests/test_wsl_materialize.py` は逆に Windows controller でだけ走ります。Windows
+workstation から POSIX 側の2つを走らせるときは、WSL を経由します。
+
+```console
+wsl.exe -d <distro> -u <user> --cd <repo> -e python3 apparatus/tests/test_cycle.py
 ```

@@ -8,6 +8,9 @@ import sys
 import tempfile
 
 
+if os.name != "posix":
+    raise SystemExit("test_claude_code_adapter.py requires a POSIX host; its fixtures are executable shell scripts")
+
 ROOT = Path(__file__).resolve().parents[2]
 ADAPTER = ROOT / "apparatus" / "subjects" / "claude_code.py"
 SPEC = importlib.util.spec_from_file_location("claude_code", ADAPTER)

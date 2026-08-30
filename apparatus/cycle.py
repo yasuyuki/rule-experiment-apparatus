@@ -110,6 +110,10 @@ def load_environment():
     with open(ENVIRONMENT_PATH, encoding="utf-8") as handle:
         environment = json.load(handle)
     validate_against_schema(environment, "environment.schema.json", "environment")
+    if environment["executor"]["kind"] == "local-posix" and os.name != "posix":
+        raise SystemExit(
+            "executor local-posix needs a POSIX host; on a Windows controller declare the wsl executor"
+        )
     _environment_cache = environment
     return environment
 

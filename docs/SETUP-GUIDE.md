@@ -23,3 +23,6 @@ python3 apparatus/docs_check.py
 python3 apparatus/tests/test_cycle.py
 python3 apparatus/tests/test_claude_code_adapter.py
 ```
+
+後半の2つは POSIX host でだけ走ります。Windows controller では WSL 経由で実行してください。
+`local-posix` executor を Windows で読み込むと、`cycle.py` はその場で拒みます。
