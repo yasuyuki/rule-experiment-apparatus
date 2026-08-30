@@ -6,6 +6,17 @@
 treatment の2 arm、同じ base、workload、evaluation、subject list と、arm ごとの variant Git
 tree / managed SHA-256 を持ちます。`cycle.py` は source の current bytes と宣言を照合します。
 
+任意の `materials` は、workload が base の外に読む必要のある tree を name / repository /
+commit で宣言します。arm ごとではなく cycle に1度宣言するので、両 arm が同じ bytes を
+見ることは構造上成立し、Invariant 1 を弱めません。`materialize` は pinned commit を
+`<release>/materials/<name>` へ clone します。arm workspace の外側なので arm の diff には
+入らず、workload からは `../materials/<name>` で届きます。`review` は収集前に各 material が
+pinned commit のまま clean であることを再検査し、fingerprint を review record へ固定します。
+
+この field が必要なのは、次の cycle の計画作成のように、過去の control record や apparatus
+の docs を読まなければ成立しない workload があるからです。base の1 repository だけでは
+その workload を宣言できません。
+
 ## Subject descriptor
 
 `apparatus/schemas/subject.schema.json` は protocol version、adapter entrypoint / SHA-256、opaque
@@ -16,8 +27,8 @@ Adapter は JSON を stdin で受け、JSON だけを stdout へ返します。
 
 ### `prepare`
 
-入力は cycle / arm、workspace、config root、variant path / digest、workload path / digest、opaque
-profile です。応答は adapter identity、subject version、config identity、配置先と配置後 digest、
+入力は cycle / arm、workspace、config root、variant path / digest、workload path / digest、
+宣言された material の name / path、opaque profile です。応答は adapter identity、subject version、config identity、配置先と配置後 digest、
 launch 情報、`collect` に返す opaque token です。応答形式は
 `apparatus/schemas/adapter-prepare.schema.json` が定めます。
 

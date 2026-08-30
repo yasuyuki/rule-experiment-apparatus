@@ -309,18 +309,32 @@ def adapter_identities(declaration):
     ]
 
 
+def materials_declared(declaration):
+    return declaration.get("materials", [])
+
+
+def materials_fingerprint(declaration):
+    """Materials are declared once for the cycle, not per arm, so both arms read the
+    same bytes by construction. The fingerprint pins them into the review record."""
+    return [
+        {"name": material["name"], "commit": material["commit"]}
+        for material in sorted(materials_declared(declaration), key=lambda item: item["name"])
+    ]
+
+
 def comparison_fingerprint(declaration):
     return {
         "baseCommit": declaration["base"]["commit"],
         "workloadSha256": declaration["workload"]["sha256"],
         "evaluationSha256": declaration["evaluation"]["sha256"],
+        "materials": materials_fingerprint(declaration),
         "adapters": adapter_identities(declaration),
     }
 
 
 def comparison_mismatches(arms):
     """Return comparison-key drift; arm identity and variant are the only exclusions."""
-    keys = ("baseCommit", "workloadSha256", "evaluationSha256", "adapters")
+    keys = ("baseCommit", "workloadSha256", "evaluationSha256", "materials", "adapters")
     expected = {key: arms[0][key] for key in keys}
     problems = []
     for arm in arms[1:]:
@@ -351,6 +365,41 @@ def resolve_base(declaration):
     if git_host(root, "cat-file", "-e", "%s^{commit}" % commit, check=False).returncode != 0:
         raise SystemExit("base commit not found: %s" % commit)
     return root
+
+
+def material_root(cycle_name, name):
+    return "%s/materials/%s" % (release_path(cycle_name), name)
+
+
+def resolve_materials(declaration):
+    """Read-only trees a workload needs beyond its base repository, each pinned to a
+    commit so a rerun and both arms see the same bytes."""
+    resolved, seen = [], set()
+    for material in materials_declared(declaration):
+        name = material["name"]
+        if name in seen:
+            raise SystemExit("duplicate material name: %s" % name)
+        seen.add(name)
+        root = resolve_control_path(material["repo"])
+        if not os.path.isdir(os.path.join(root, ".git")):
+            raise SystemExit("material repository not found: %s" % root)
+        commit = material["commit"]
+        if git_host(root, "cat-file", "-e", "%s^{commit}" % commit, check=False).returncode != 0:
+            raise SystemExit("material commit not found: %s (%s)" % (commit, name))
+        resolved.append({"name": name, "root": root, "commit": commit})
+    return resolved
+
+
+def verify_materials(declaration):
+    """Materials are shared by both arms, so a subject that edited one would move the
+    comparison under the other. Re-check the pin instead of trusting file modes."""
+    for material in materials_declared(declaration):
+        target = material_root(declaration["cycle"], material["name"])
+        head = exec_("git -C %s rev-parse HEAD" % shlex.quote(target)).strip()
+        if head != material["commit"]:
+            raise SystemExit("material %s left its pinned commit" % material["name"])
+        if exec_("git -C %s status --porcelain" % shlex.quote(target)).strip():
+            raise SystemExit("material %s was modified during the cycle" % material["name"])
 
 
 def state_path(cycle_name):
@@ -398,10 +447,30 @@ def _clone_arms(declaration, base):
     exec_("\n".join(lines))
 
 
+def _clone_materials(declaration, materials):
+    """Sibling of the arm workspaces, never inside one: materialize commits whatever
+    it finds in an arm, and material bytes are not part of the arm's diff."""
+    if not materials:
+        return
+    release = release_path(declaration["cycle"])
+    lines = ["set -eu", "mkdir -p %s/materials" % shlex.quote(release)]
+    for material in materials:
+        target = material_root(declaration["cycle"], material["name"])
+        lines.extend([
+            "git clone -q %s %s" % (
+                shlex.quote(to_executor_path(material["root"])), shlex.quote(target)
+            ),
+            "git -C %s checkout -q --detach %s" % (shlex.quote(target), shlex.quote(material["commit"])),
+            "find %s -type f -exec chmod a-w {} +" % shlex.quote(target),
+        ])
+    exec_("\n".join(lines))
+
+
 def materialize(cycle_name):
     declaration = load_cycle(cycle_name)
     validate_comparison(declaration)
     base = resolve_base(declaration)
+    materials = resolve_materials(declaration)
     workload = artifact_path(declaration, "workload")
     artifact_path(declaration, "evaluation")
     problems = [problem for arm in declaration["arms"] for problem in verify_canonical(declaration, arm)]
@@ -411,6 +480,7 @@ def materialize(cycle_name):
     if os.path.exists(output):
         raise SystemExit("adapter state already exists: %s" % output)
     _clone_arms(declaration, base)
+    _clone_materials(declaration, materials)
     release = release_path(cycle_name)
     state_arms = []
     for arm in declaration["arms"]:
@@ -430,6 +500,10 @@ def materialize(cycle_name):
                     "path": to_executor_path(workload),
                     "digest": declaration["workload"]["sha256"],
                 },
+                "materials": [
+                    {"name": material["name"], "path": material_root(cycle_name, material["name"])}
+                    for material in materials
+                ],
                 "profile": subject_profile(descriptor),
             })
             if prepare["variantDigest"] != arm["variantDigest"]:
@@ -516,6 +590,7 @@ def review(cycle_name):
     declaration_sha = sha256_file(cycle_path(cycle_name))
     if state.get("cycle") != cycle_name or state.get("declarationSha256") != declaration_sha:
         raise SystemExit("declaration changed after materialize")
+    verify_materials(declaration)
     state_by_arm = {arm["id"]: arm for arm in state.get("arms", [])}
     evaluation_arms, review_subjects, adapter_reasons = [], {}, []
     for arm in declaration["arms"]:
@@ -570,6 +645,7 @@ def review(cycle_name):
             "baseCommit": declaration["base"]["commit"],
             "workloadSha256": declaration["workload"]["sha256"],
             "evaluationSha256": declaration["evaluation"]["sha256"],
+            "materials": materials_fingerprint(declaration),
             "adapters": [
                 {"id": item["id"], "identity": item["adapterIdentity"]}
                 for item in review_subjects[arm["id"]]
@@ -600,6 +676,8 @@ def review(cycle_name):
         "verdict": "promote" if not reasons else "reject", "reasons": reasons,
         "treatmentDigest": treatment["variantDigest"],
     }
+    if materials_declared(declaration):
+        record["materials"] = materials_fingerprint(declaration)
     validate_against_schema(record, "review.schema.json", "review %s" % cycle_name)
     atomic_write_json(output, record)
     os.unlink(temporary)
@@ -652,6 +730,8 @@ def promotion_reasons(cycle_name, declaration, record):
         reasons.append("workload differs between declaration and review")
     if record["evaluationSha256"] != declaration["evaluation"]["sha256"]:
         reasons.append("evaluation differs between declaration and review")
+    if record.get("materials", []) != materials_fingerprint(declaration):
+        reasons.append("materials differ between declaration and review")
     treatment = next(arm for arm in declaration["arms"] if arm["role"] == "treatment")
     reviewed = next(arm for arm in record["arms"] if arm["role"] == "treatment")
     if reviewed["variantTree"] != treatment["variantTree"]:
@@ -844,13 +924,30 @@ def core_selfcheck(check_active_environment=False):
     }
     validate_against_schema(declaration, "cycle.schema.json", "selfcheck cycle")
     common = {
-        "baseCommit": tree_a, "workloadSha256": sha_a,
-        "evaluationSha256": sha_b, "adapters": [{"id": "fake", "identity": sha_a}],
+        "baseCommit": tree_a, "workloadSha256": sha_a, "evaluationSha256": sha_b,
+        "materials": [], "adapters": [{"id": "fake", "identity": sha_a}],
     }
     arms = [dict(common, variantDigest=sha_a), dict(common, variantDigest=sha_b)]
     assert comparison_mismatches(arms) == []
     arms[1] = dict(arms[1], adapters=[{"id": "fake", "identity": sha_b}])
     assert comparison_mismatches(arms) == ["adapters differs across arms"]
+    assert materials_fingerprint(declaration) == []
+    with_materials = dict(
+        declaration,
+        materials=[
+            {"name": "records", "repo": "../control", "commit": tree_b},
+            {"name": "docs", "repo": "../apparatus", "commit": tree_a},
+        ],
+    )
+    validate_against_schema(with_materials, "cycle.schema.json", "selfcheck materials")
+    assert materials_fingerprint(with_materials) == [
+        {"name": "docs", "commit": tree_a}, {"name": "records", "commit": tree_b}
+    ]
+    material_arms = [
+        dict(common, variantDigest=sha_a),
+        dict(common, variantDigest=sha_b, materials=[{"name": "records", "commit": tree_b}]),
+    ]
+    assert comparison_mismatches(material_arms) == ["materials differs across arms"]
     criteria = {
         "control": [{"criterion": 1, "text": "effect", "result": "not-met", "evidence": "control"}],
         "treatment": [{"criterion": 1, "text": "effect", "result": "met", "evidence": "treatment"}],

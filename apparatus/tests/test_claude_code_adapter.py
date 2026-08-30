@@ -100,13 +100,14 @@ fi
         commit(root, "base")
         return root
 
-    def prepare(name):
+    def prepare(name, materials=()):
         root, config = workspace(name), temp / (name + "-config")
         payload = {
             "protocolVersion": 1, "cycle": "fixture", "arm": name,
             "workspace": str(root), "configRoot": str(config),
             "variant": {"path": str(variant), "digest": digest},
             "workload": {"path": str(temp / "workload.md"), "digest": "0" * 64},
+            "materials": list(materials),
             "profile": profile,
         }
         result = json.loads(run(sys.executable, str(ADAPTER), "prepare",
@@ -118,6 +119,10 @@ fi
     assert prepared_a["configIdentity"] == prepared_b["configIdentity"]
     assert prepared_a["variantDigest"] == digest
     assert "launcher" in prepared_a["launch"]
+    assert "--add-dir" not in prepared_a["launch"]
+    # A declared material has to be named at launch or the subject cannot read it.
+    _, _, prepared_m = prepare("arm-m", [{"name": "records", "path": str(temp / "records")}])
+    assert "--add-dir %s" % str(temp / "records") in prepared_m["launch"]
     for config in (config_a, config_b):
         for name in claude_code.CREDENTIALS:
             path = config / name

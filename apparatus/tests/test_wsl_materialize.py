@@ -67,8 +67,8 @@ print(json.dumps({
 
 with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
     temp = Path(raw)
-    control, source, base, subjects = (temp / name for name in (
-        "control", "source", "base", "subjects"
+    control, source, base, subjects, material = (temp / name for name in (
+        "control", "source", "base", "subjects", "material"
     ))
     # 宣言は control repository の中にある。configure_environment が CYCLES_DIR を
     # そこへ向けるので、外に置いた directory を指しても上書きされる。
@@ -80,6 +80,11 @@ with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
     write(base / "README.md", "fixture\n")
     commit(base, "base")
     base_commit = git_value(base, "rev-parse", "HEAD")
+
+    git_init(material)
+    write(material / "NOTE.md", "declared material\n")
+    commit(material, "material")
+    material_commit = git_value(material, "rev-parse", "HEAD")
 
     git_init(source)
     experiment = source / "experiments" / "demo"
@@ -129,6 +134,7 @@ with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
             "sha256": hashlib.sha256((experiment / "evaluate.py").read_bytes()).hexdigest(),
         },
         "base": {"repo": str(base), "commit": base_commit},
+        "materials": [{"name": "records", "repo": str(material), "commit": material_commit}],
         "arms": [
             {
                 "id": "control", "role": "control", "variant": "v1",
@@ -154,6 +160,24 @@ with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
         output = cycle.exec_("sha256sum %s/wsl-materialize/{control,treatment}/.rules/demo.txt" % runs_root)
         expected = [hashlib.sha256(body).hexdigest() for body in (b"old\n", b"new\n")]
         assert [line.split()[0] for line in output.splitlines()] == expected
+        # The material lands beside the arms, pinned and not writable, and review
+        # re-checks the pin rather than trusting the file mode.
+        note = "%s/wsl-materialize/materials/records/NOTE.md" % runs_root
+        assert cycle.exec_("cat %s" % note) == "declared material\n"
+        assert cycle.exec_(
+            "git -C %s/wsl-materialize/materials/records rev-parse HEAD" % runs_root
+        ).strip() == material_commit
+        # root ignores the mode, so check the bits rather than test -w.
+        mode = cycle.exec_("stat -c '%a' " + note).strip()
+        assert int(mode, 8) & 0o222 == 0, mode
+        cycle.verify_materials(declaration)
+        cycle.exec_("chmod u+w %s && printf edited >> %s" % (note, note))
+        try:
+            cycle.verify_materials(declaration)
+        except SystemExit as error:
+            assert "was modified during the cycle" in str(error), error
+        else:
+            raise AssertionError("a modified material was accepted")
     finally:
         cycle.exec_("rm -rf -- %s" % runs_root)
         cycle.CYCLES_DIR, cycle.SUBJECTS_DIR = old_dirs

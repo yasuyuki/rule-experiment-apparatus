@@ -191,8 +191,13 @@ def prepare(payload, identity):
 
     version = run([settings["binary"], "--version"], check=False)
     subject_version = (version.stdout or version.stderr).strip().splitlines()
-    inner = "cd %s && CLAUDE_CONFIG_DIR=%s %s" % tuple(
-        shlex.quote(value) for value in (workspace, config_root, settings["binary"])
+    # Declared read-only trees the workload must reach. Claude Code confines reads to
+    # the working directory unless the extra roots are named at launch.
+    extra = "".join(
+        " --add-dir %s" % shlex.quote(material["path"]) for material in payload.get("materials", [])
+    )
+    inner = "cd %s && CLAUDE_CONFIG_DIR=%s %s%s" % (
+        tuple(shlex.quote(value) for value in (workspace, config_root, settings["binary"])) + (extra,)
     )
     return {
         "protocolVersion": 1,

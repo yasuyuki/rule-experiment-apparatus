@@ -23,6 +23,18 @@
         "commit": { "$ref": "#/$defs/gitObject" }
       }
     },
+    "materials": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "repo", "commit"],
+        "properties": {
+          "name": { "$ref": "#/$defs/identifier" },
+          "repo": { "type": "string", "minLength": 1 },
+          "commit": { "$ref": "#/$defs/gitObject" }
+        }
+      }
+    },
     "arms": {
       "type": "array", "minItems": 2, "maxItems": 2,
       "contains": {

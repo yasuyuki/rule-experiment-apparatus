@@ -6,6 +6,7 @@
 | cycle | 同じ固定入力から作る1回の control / treatment 比較 |
 | arm | 比較の1条件。control 1件と treatment 1件 |
 | base | 両 arm が共有する workload repository commit |
+| material | workload が base の外に読む必要のある tree。cycle に1度宣言し commit で固定する |
 | baseline | 検証済みの stable rule-source tree |
 | variant | baseline 候補となる完全な managed rule-source bytes |
 | declaration | base、workload、evaluation、subject、variant identity を固定する JSON |
