@@ -10,6 +10,7 @@ adapter の JSON protocol と digest だけを扱います。
 ## Documents
 
 - [Constitution](CONSTITUTION.md)
+- [Improvement policy](docs/IMPROVEMENT-POLICY.md)
 - [Terms](TERMS.md)
 - [Protocol and records](docs/RULE-EXPERIMENT.md)
 - [Setup guide](docs/SETUP-GUIDE.md)

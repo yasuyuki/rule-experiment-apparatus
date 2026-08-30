@@ -3,14 +3,17 @@
 
 索引は人が README.md に書く。この検査が見るのは網羅性と整合性だけである。
 
-1. 到達可能性 — README.md から Markdown リンクを推移的に辿り、版管理下の md 全件へ
+1. 憲章文書の実在 — CONSTITUTION.md と docs/IMPROVEMENT-POLICY.md が版管理下にある。
+   両者は同じ位置づけであり、削減の一手として消してよい文書ではない。実際に片方が
+   削減の commit に巻き込まれて消えた。
+2. 到達可能性 — README.md から Markdown リンクを推移的に辿り、版管理下の md 全件へ
    到達する。到達しない文書は「存在するが入口から辿れない」状態であり、実際に
    見落とされた（アームの可視範囲が正本に無いまま候補が立った）。
-2. リンク切れ — 版管理下 md の相対リンク先が実在する。
-3. 索引の包含 — CONSTITUTION.md の関連文書図に現れる md が README の索引にもある。
+3. リンク切れ — 版管理下 md の相対リンク先が実在する。
+4. 索引の包含 — CONSTITUTION.md の関連文書図に現れる md が README の索引にもある。
    索引が2つに分かれて食い違うのを防ぐ。
-4. 履歴の表明 — README の履歴表に載る文書が、先頭 15 行以内で自分を履歴と宣言する。
-5. 未追跡の文書 — docs/ と apparatus/ に置かれた md が版管理下にある。書いたが git add
+5. 履歴の表明 — README の履歴表に載る文書が、先頭 15 行以内で自分を履歴と宣言する。
+6. 未追跡の文書 — docs/ と apparatus/ に置かれた md が版管理下にある。書いたが git add
    していない、または .gitignore の allowlist から外れた文書は、検査 1〜4 の対象に
    ならないまま消える。
 """
@@ -22,6 +25,8 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INDEX = "README.md"
+# 同位の憲章文書。一方が消えると、削除の可否を判断する根拠自体が失われる。
+CONSTITUTIONAL = ("CONSTITUTION.md", "docs/IMPROVEMENT-POLICY.md")
 HISTORICAL_HEADING = "### Historical"
 HISTORICAL_MARK = "現行の作業指示に使わない"
 HISTORICAL_MARK_LINES = 15
@@ -91,9 +96,19 @@ def main():
     problems = []
     tracked = tracked_markdown()
     tracked_set = set(tracked)
+
+    # 1. 憲章文書の実在。以降の検査はこれらを読むので、欠けていれば先に打ち切る。
+    missing = [path for path in CONSTITUTIONAL if path not in tracked_set]
+    if missing:
+        for path in missing:
+            print("憲章文書の欠落: %s が版管理下に無い" % path)
+        print("FAIL: %d tracked markdown, %d problem(s)"
+              % (len(tracked), len(missing)))
+        return 1
+
     index_text = read(INDEX)
 
-    # 1. 到達可能性（推移的）
+    # 2. 到達可能性（推移的）
     seen, queue = {INDEX}, [INDEX]
     while queue:
         current = queue.pop()
@@ -105,13 +120,13 @@ def main():
         if path not in seen:
             problems.append("到達不能: %s は %s から辿れない" % (path, INDEX))
 
-    # 2. リンク切れ
+    # 3. リンク切れ
     for path in tracked:
         for target in links_in(path, read(path)):
             if not os.path.exists(os.path.join(ROOT, target)):
                 problems.append("リンク切れ: %s -> %s" % (path, target))
 
-    # 3. 索引の包含（関連文書図 ⊆ README の索引）
+    # 4. 索引の包含（関連文書図 ⊆ README の索引）
     index_links = set(links_in(INDEX, index_text))
     diagram = re.findall(r"^```text\n(.*?)^```", read("CONSTITUTION.md"),
                          re.MULTILINE | re.DOTALL)
@@ -123,7 +138,7 @@ def main():
                     "索引漏れ: CONSTITUTION.md の関連文書図にある %s が %s の索引に無い"
                     % (token, INDEX))
 
-    # 4. 履歴の表明
+    # 5. 履歴の表明
     entries = historical_entries(index_text)
     if entries is None:
         problems.append("%s に %s 見出しが無い" % (INDEX, HISTORICAL_HEADING))
@@ -137,7 +152,7 @@ def main():
                     "履歴の表明が無い: %s の先頭 %d 行に %r が無い"
                     % (path, HISTORICAL_MARK_LINES, HISTORICAL_MARK))
 
-    # 5. 未追跡の文書
+    # 6. 未追跡の文書
     for path in untracked_markdown():
         problems.append("未追跡: %s は版管理下に無く、索引の照合対象にならない" % path)
 
