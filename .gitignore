@@ -1,6 +1,11 @@
 __pycache__/
 *.py[cod]
 apparatus/cycles/
-.claude/plan-phases/
+# Phase scratch and the operator rule layer that work/PLACEMENT.md projects here.
+# Neither is part of this artifact.
+.claude/
+.cursor/
+.agents/
+AGENTS.md
 HANDOFF.md
 ISSUES.md
