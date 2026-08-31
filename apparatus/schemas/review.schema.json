@@ -51,7 +51,8 @@
       "properties": {
         "id": { "$ref": "#/$defs/identifier" },
         "adapterIdentity": { "$ref": "#/$defs/sha256" },
-        "adapterResponseDigest": { "$ref": "#/$defs/sha256" }
+        "adapterResponseDigest": { "$ref": "#/$defs/sha256" },
+        "subjectVersion": { "type": "string", "minLength": 1 }
       }
     },
     "criterion": {

@@ -239,6 +239,10 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
             subject["adapterIdentity"] for arm in review["arms"] for subject in arm["subjects"]
         }
         assert identities == {descriptor["adapter"]["sha256"]}
+        versions = {
+            subject["subjectVersion"] for arm in review["arms"] for subject in arm["subjects"]
+        }
+        assert versions == {"fake-1"}
 
         cycle.promote("fixture")
         promotion = json.loads((control / "promotions" / "fixture.json").read_text(encoding="utf-8"))

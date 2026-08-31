@@ -621,6 +621,7 @@ def review(cycle_name):
             public_subjects.append({
                 "id": subject_id, "adapterIdentity": descriptor["adapter"]["sha256"],
                 "adapterResponseDigest": response_digest,
+                "subjectVersion": prepare["subjectVersion"],
             })
             evaluation_subjects.append({
                 "id": subject_id, "adapterIdentity": descriptor["adapter"]["sha256"],

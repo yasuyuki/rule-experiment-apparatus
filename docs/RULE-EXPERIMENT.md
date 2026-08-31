@@ -38,8 +38,11 @@ launch 情報、`collect` に返す opaque token です。応答形式は
 読み込み成否、sanitized evidence reference です。応答形式は
 `apparatus/schemas/adapter-collect.schema.json` が定めます。
 
-Core は adapter 応答の内容を公開記録に複製しません。`prepare` と `collect` の canonical JSON
-digest、adapter identity だけを review に取り込み、一時 state を削除します。
+Core は adapter 応答をそのまま公開記録へ複製しません。review へ取り込むのは `prepare` と
+`collect` の canonical JSON digest、adapter identity、`prepare` が報告した subject version の
+3つだけで、取り込んだ後に一時 state を削除します。subject version は arm 間の harness 差を
+後から見つけるための記録であり、取得できたときだけ載る任意 field です。verdict と `promote`
+の条件には入りません（`CONSTITUTION.md` Accepted risk）。
 
 ## Evaluation and review
 
@@ -49,8 +52,8 @@ reference を持ちます。Treatment の改善が1件以上あり、regression 
 review verdict は `promote` です。
 
 `apparatus/schemas/review.schema.json` は declaration digest、base commit、workload / evaluation
-digest、両 arm の variant identity、adapter identity / response digest、criteria、verdict、採用対象
-treatment digest を1件に固定します。
+digest、両 arm の variant identity、adapter identity / response digest / subject version、criteria、
+verdict、採用対象 treatment digest を1件に固定します。
 
 ## Baseline transition
 
