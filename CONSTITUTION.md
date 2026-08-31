@@ -2,8 +2,10 @@
 
 ## Purpose
 
-唯一の基本目的は、agent rule の行動差を信頼できる control / treatment 比較で計測し、
-実際に評価した rule bytes と同一の bytes を baseline へ採用できるようにすることです。
+唯一の基本目的は、agent へ渡す指示 bytes、すなわち rule と skill の行動差を信頼できる
+control / treatment 比較で計測し、実際に評価した指示 bytes と同一の bytes を baseline へ
+採用できるようにすることです。skill は subject が起動したときだけ届くので、装置は
+起動したかどうかも証拠に含めます。
 
 ## Boundary
 
@@ -21,7 +23,7 @@ CONSTITUTION.md + docs/IMPROVEMENT-POLICY.md
 
 Controller は宣言、repository の複製、digest 照合、評価、review、baseline の状態遷移を
 扱います。Subject は注入済み variant の下で逐語の workload だけを実行します。
-Subject adapter は CLI 固有の executable、config、credential、session、rule placement と
+Subject adapter は CLI 固有の executable、config、credential、session、指示 bytes の placement と
 sanitized evidence reference を所有します。
 
 ## Invariants
