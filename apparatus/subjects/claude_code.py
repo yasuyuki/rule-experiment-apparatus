@@ -15,6 +15,7 @@ import sys
 MANAGED_ITEMS = ("rules", "placement.json", "bin/rules.py")
 CREDENTIALS = (".credentials.json", ".claude.json")
 PHASE_RE = re.compile(r"^\.claude/plan-phases/[^/]+/phase-[^/]*\.md$")
+SKILL_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 EVIDENCE_KIND = "rule-experiment-evidence-v1"
 
 
@@ -230,7 +231,7 @@ def phase_path(workspace, value):
 
 
 def transcript_evidence(config_root, workspace, marker):
-    documents = {}
+    documents, skills = {}, {}
     assistant_count = marker_count = 0
     sessions = sorted(glob.glob(os.path.join(config_root, "projects", "*", "*.jsonl")))
     for path in sessions:
@@ -258,6 +259,16 @@ def transcript_evidence(config_root, workspace, marker):
                     if block.get("type") != "tool_use" or not isinstance(block.get("input"), dict):
                         continue
                     args = block["input"]
+                    if block.get("name") == "Skill":
+                        # A rule reaches the subject by being in context; a skill only
+                        # reaches it when the subject invokes it. Without this count,
+                        # "the skill changed nothing" and "the skill never ran" are the
+                        # same observation. The name is subject-supplied, so only a bare
+                        # identifier is kept and everything else is dropped.
+                        name = args.get("skill")
+                        if isinstance(name, str) and SKILL_NAME_RE.fullmatch(name):
+                            skills[name] = skills.get(name, 0) + 1
+                        continue
                     relative = phase_path(workspace, args.get("file_path"))
                     if relative is None:
                         continue
@@ -267,7 +278,7 @@ def transcript_evidence(config_root, workspace, marker):
                         old, new = args.get("old_string"), args.get("new_string")
                         if isinstance(old, str) and isinstance(new, str) and old in documents[relative]:
                             documents[relative] = documents[relative].replace(old, new, 1)
-    return sessions, assistant_count, marker_count, documents
+    return sessions, assistant_count, marker_count, documents, skills
 
 
 def collect(payload, identity):
@@ -277,7 +288,7 @@ def collect(payload, identity):
     workspace, config_root = token["workspace"], token["configRoot"]
     settings = profile(payload["profile"])
     verify_credential_links(config_root, settings["credentialSources"])
-    sessions, assistants, markers, documents = transcript_evidence(
+    sessions, assistants, markers, documents, skills = transcript_evidence(
         config_root, workspace, token["marker"]
     )
     clean = not git(workspace, "status", "--porcelain").stdout.strip()
@@ -289,6 +300,7 @@ def collect(payload, identity):
         "markerCount": markers,
         "phaseDocuments": documents,
         "sessionCount": len(sessions),
+        "skillInvocations": skills,
         "clean": clean,
         "commitsAfterBase": commits,
     }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

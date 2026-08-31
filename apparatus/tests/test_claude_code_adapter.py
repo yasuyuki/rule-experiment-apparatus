@@ -144,6 +144,10 @@ fi
             {"type": "tool_use", "name": "Write", "input": {
                 "file_path": str(phase), "content": "```console\nsh scripts/check.sh\n```\n"
             }},
+            {"type": "tool_use", "name": "Skill", "input": {"skill": "demo-skill"}},
+            {"type": "tool_use", "name": "Skill", "input": {"skill": "demo-skill", "args": "full"}},
+            {"type": "tool_use", "name": "Skill", "input": {"skill": "/etc/passwd"}},
+            {"type": "tool_use", "name": "Skill", "input": {"skill": 7}},
         ]},
     }) + "\n")
     collected = json.loads(run(sys.executable, str(ADAPTER), "collect", stdin=json.dumps({
@@ -154,6 +158,10 @@ fi
     assert collected["ruleLoaded"] is True
     evidence = json.loads(collected["evidence"][0])
     assert evidence["phaseDocuments"][".claude/plan-phases/fixture/phase-01.md"].startswith("```console")
+    # A skill only reaches the subject when the subject invokes it, so the count
+    # separates "the skill changed nothing" from "the skill never ran". The name is
+    # subject-supplied, so anything but a bare identifier is dropped.
+    assert evidence["skillInvocations"] == {"demo-skill": 2}
     assert not any(str(temp) in item for item in collected["evidence"])
 
     settings = claude_code.profile(profile)
