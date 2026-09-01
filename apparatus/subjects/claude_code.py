@@ -140,7 +140,13 @@ def placements(workspace):
 def verify_credential_links(config_root, sources):
     for name in CREDENTIALS:
         path = os.path.join(config_root, name)
-        if not os.path.islink(path) or os.readlink(path) != sources[name]:
+        source = sources[name]
+        # Claude Code atomically replaces these symlinks with regular files.
+        if not os.path.islink(path) and os.path.isfile(path):
+            shutil.copyfile(path, source)
+            os.remove(path)
+            os.symlink(source, path)
+        if not os.path.islink(path) or os.readlink(path) != source:
             raise SystemExit("Claude credential link changed: %s" % name)
 
 

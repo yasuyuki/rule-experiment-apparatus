@@ -178,15 +178,29 @@ fi
         else:
             raise AssertionError("invalid authentication passed")
 
-    broken = config_a / ".credentials.json"
-    broken.unlink()
-    write(broken, "credential\n")
+    replaced = config_a / ".credentials.json"
+    replaced.unlink()
+    write(replaced, "refreshed\n")
+    restored = json.loads(run(sys.executable, str(ADAPTER), "collect", stdin=json.dumps({
+        "protocolVersion": 1, "cycle": "fixture", "arm": "arm-a",
+        "workspace": str(workspace_a), "profile": profile, "token": prepared_a["token"],
+    })).stdout)
+    assert restored["success"] is True
+    assert replaced.is_symlink()
+    assert os.readlink(replaced) == native_sources[".credentials.json"]
+    assert Path(native_sources[".credentials.json"]).read_text(encoding="utf-8") == "refreshed\n"
+
+    diverted = config_a / ".claude.json"
+    diverted.unlink()
+    other = temp / "other-claude.json"
+    write(other, "other\n")
+    diverted.symlink_to(other)
     failed = run(sys.executable, str(ADAPTER), "collect", check=False, stdin=json.dumps({
         "protocolVersion": 1, "cycle": "fixture", "arm": "arm-a",
         "workspace": str(workspace_a), "profile": profile, "token": prepared_a["token"],
     }))
     assert failed.returncode != 0
-    assert "Claude credential link changed: .credentials.json" in failed.stderr
+    assert "Claude credential link changed: .claude.json" in failed.stderr
     assert not any(source in failed.stderr for source in native_sources.values())
 
 print("claude adapter fixture: ok")
