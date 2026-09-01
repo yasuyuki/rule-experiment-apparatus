@@ -22,3 +22,8 @@ python3 apparatus/cycle.py --environment <environment.json> rollback --cycle <cy
 ```
 
 失敗した cycle の declaration、arm、review は編集しません。修正後は新しい cycle id で再実行します。
+
+`promote` は treatment variant の、cycle 宣言時に凍結した bytes を stable へ載せます。
+その後に baseline が進んでいる cycle を promote すると、測定した rule 以外の placement と
+他 rule も古い snapshot で上書きします。現行 stable の bytes と宣言時 treatment が一致して
+いる cycle だけを promote してください。
