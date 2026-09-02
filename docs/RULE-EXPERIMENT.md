@@ -8,8 +8,10 @@ tree / managed SHA-256 を持ちます。`cycle.py` は source の current bytes
 
 任意の `materials` は、workload が base の外に読む必要のある tree を name / repository /
 commit で宣言します。arm ごとではなく cycle に1度宣言するので、両 arm が同じ bytes を
-見ることは構造上成立し、Invariant 1 を弱めません。`materialize` は pinned commit を
-`<release>/materials/<name>` へ clone します。arm workspace の外側なので arm の diff には
+見ることは構造上成立し、Invariant 1 を弱めません。`materialize` は pinned commit だけを
+`<release>/materials/<name>` へ取り出し、history は持ち込みません。持ち込むと、宣言が
+置き去りにした過去の rule bytes を arm の中から `git log` 1回で読めてしまい、variant bytes
+だけが違うという Invariant 1 が成立しません。arm workspace の外側なので arm の diff には
 入らず、workload からは `../materials/<name>` で届きます。`review` は収集前に各 material が
 pinned commit のまま clean であることを再検査し、fingerprint を review record へ固定します。
 

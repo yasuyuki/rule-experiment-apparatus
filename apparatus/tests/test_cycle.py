@@ -119,7 +119,9 @@ print(json.dumps({"arms": arms}))
 
 with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
     temp = Path(raw)
-    control, source, stable, base = (temp / name for name in ("control", "source", "stable", "base"))
+    control, source, stable, base, material = (
+        temp / name for name in ("control", "source", "stable", "base", "material")
+    )
     subjects, cycles, runs = temp / "subjects", control / "cycles", temp / "runs"
     for path in (control, subjects, cycles, runs):
         path.mkdir(parents=True)
@@ -128,6 +130,16 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
     write(base / "README.md", "fixture\n")
     git_commit(base, "base")
     base_commit = git_value(base, "rev-parse", "HEAD")
+
+    # An earlier revision holding rule bytes the pinned commit no longer carries: the
+    # arm must not be able to read it back out of the material's history.
+    git_init(material)
+    write(material / "policy.template", "stray rule bytes\n")
+    git_commit(material, "policy")
+    write(material / "reference.md", "material\n")
+    (material / "policy.template").unlink()
+    git_commit(material, "drop policy")
+    material_commit = git_value(material, "rev-parse", "HEAD")
 
     git_init(source)
     experiment = source / "experiments" / "demo"
@@ -182,6 +194,9 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
                 "path": "experiments/demo/evaluate.py", "sha256": sha(experiment / "evaluate.py"),
             },
             "base": {"repo": str(base), "commit": base_commit},
+            "materials": [
+                {"name": "reference", "repo": str(material), "commit": material_commit}
+            ],
             "arms": [
                 {
                     "id": "control", "role": "control", "variant": "v1",
@@ -225,6 +240,16 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         assert (runs / "fixture" / "control" / ".rules" / "demo.txt").read_text() == "old\n"
         assert (runs / "fixture" / "treatment" / ".rules" / "demo.txt").read_text() == "new\n"
         assert Path(cycle.state_path("fixture")).is_file()
+        materialized = runs / "fixture" / "materials" / "reference"
+        assert (materialized / "reference.md").read_text() == "material\n"
+        assert git_value(materialized, "rev-parse", "HEAD") == material_commit
+        revisions = git_value(materialized, "rev-list", "--all").split()
+        assert revisions == [material_commit], revisions
+        stray = subprocess.run(
+            ["git", "grep", "-l", "stray", *revisions],
+            cwd=materialized, capture_output=True, text=True,
+        )
+        assert stray.returncode == 1 and not stray.stdout, stray
         for arm in ("control", "treatment"):
             workspace = runs / "fixture" / arm
             write(workspace / "result.txt", arm + "\n")

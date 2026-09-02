@@ -449,7 +449,12 @@ def _clone_arms(declaration, base):
 
 def _clone_materials(declaration, materials):
     """Sibling of the arm workspaces, never inside one: materialize commits whatever
-    it finds in an arm, and material bytes are not part of the arm's diff."""
+    it finds in an arm, and material bytes are not part of the arm's diff.
+
+    Only the pinned commit is fetched. A clone carries every earlier revision too, and
+    one `git log` inside the arm reaches them: rule bytes that the declaration left
+    behind stay readable, which is the confound Invariant 1 forbids. Pinning the commit
+    is not enough when the stray bytes are the rule under measurement."""
     if not materials:
         return
     release = release_path(declaration["cycle"])
@@ -457,10 +462,12 @@ def _clone_materials(declaration, materials):
     for material in materials:
         target = material_root(declaration["cycle"], material["name"])
         lines.extend([
-            "git clone -q %s %s" % (
-                shlex.quote(to_executor_path(material["root"])), shlex.quote(target)
+            "git init -q %s" % shlex.quote(target),
+            "git -C %s fetch -q --depth 1 %s %s" % (
+                shlex.quote(target), shlex.quote(to_executor_path(material["root"])),
+                shlex.quote(material["commit"]),
             ),
-            "git -C %s checkout -q --detach %s" % (shlex.quote(target), shlex.quote(material["commit"])),
+            "git -C %s checkout -q --detach FETCH_HEAD" % shlex.quote(target),
             "find %s -type f -exec chmod a-w {} +" % shlex.quote(target),
         ])
     exec_("\n".join(lines))
