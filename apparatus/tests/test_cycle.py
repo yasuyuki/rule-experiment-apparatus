@@ -126,10 +126,17 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
     for path in (control, subjects, cycles, runs):
         path.mkdir(parents=True)
 
+    # The pinned base sits between a revision carrying rule bytes it no longer holds and
+    # a later one it excludes: an arm must be able to read neither out of the history.
     git_init(base)
+    write(base / "policy.template", "stray rule bytes\n")
+    git_commit(base, "policy")
     write(base / "README.md", "fixture\n")
+    (base / "policy.template").unlink()
     git_commit(base, "base")
     base_commit = git_value(base, "rev-parse", "HEAD")
+    write(base / "LATER.md", "past the pin\n")
+    git_commit(base, "later")
 
     # An earlier revision holding rule bytes the pinned commit no longer carries: the
     # arm must not be able to read it back out of the material's history.
@@ -252,6 +259,14 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         assert stray.returncode == 1 and not stray.stdout, stray
         for arm in ("control", "treatment"):
             workspace = runs / "fixture" / arm
+            assert not (workspace / "LATER.md").exists()
+            assert git_value(workspace, "rev-list", "--max-parents=0", "HEAD") == base_commit
+            arm_revisions = git_value(workspace, "rev-list", "--all").split()
+            stray = subprocess.run(
+                ["git", "grep", "-l", "stray", *arm_revisions],
+                cwd=workspace, capture_output=True, text=True,
+            )
+            assert stray.returncode == 1 and not stray.stdout, stray
             write(workspace / "result.txt", arm + "\n")
             git_commit(workspace, "result")
         cycle.review("fixture")

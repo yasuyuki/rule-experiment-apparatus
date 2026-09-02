@@ -6,6 +6,12 @@
 treatment の2 arm、同じ base、workload、evaluation、subject list と、arm ごとの variant Git
 tree / managed SHA-256 を持ちます。`cycle.py` は source の current bytes と宣言を照合します。
 
+`materialize` は base も pinned commit だけを arm workspace へ取り出し、history は
+持ち込みません。宣言が base の working tree から取り除いた rule bytes は pin した commit の
+history に残っており、持ち込めば arm の中から `git log` 1回で対照条件そのものへ届きます。
+測定は pin より後ろしか見ない（`merge-base --is-ancestor`、`rev-list <base>..HEAD`、
+`log --diff-filter=A <base>..HEAD`、`ls-tree <base>`）ので、落とす祖先を読むものはありません。
+
 任意の `materials` は、workload が base の外に読む必要のある tree を name / repository /
 commit で宣言します。arm ごとではなく cycle に1度宣言するので、両 arm が同じ bytes を
 見ることは構造上成立し、Invariant 1 を弱めません。`materialize` は pinned commit だけを

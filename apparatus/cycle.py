@@ -431,6 +431,13 @@ def run_adapter(descriptor, operation, payload):
 
 
 def _clone_arms(declaration, base):
+    """Only the pinned commit is fetched. A clone carries every earlier revision too,
+    and one `git log` inside the arm reaches them: bytes a declaration removed from the
+    base working tree stay readable in the history of the commit it pinned, which is the
+    confound Invariant 1 forbids. Measurement never looks behind the pin --
+    `merge-base --is-ancestor`, `rev-list <base>..HEAD`, `log --diff-filter=A
+    <base>..HEAD` and `ls-tree <base>` all start there -- so the ancestors this drops
+    are ones nothing reads."""
     release = release_path(declaration["cycle"])
     lines = [
         "set -eu", "test ! -e %s" % shlex.quote(release),
@@ -439,10 +446,12 @@ def _clone_arms(declaration, base):
     for arm in declaration["arms"]:
         workspace = "%s/%s" % (release, arm["id"])
         lines.extend([
-            "git clone -q %s %s" % (shlex.quote(to_executor_path(base)), shlex.quote(workspace)),
-            "git -C %s checkout -q --detach %s" % (
-                shlex.quote(workspace), shlex.quote(declaration["base"]["commit"])
+            "git init -q %s" % shlex.quote(workspace),
+            "git -C %s fetch -q --depth 1 %s %s" % (
+                shlex.quote(workspace), shlex.quote(to_executor_path(base)),
+                shlex.quote(declaration["base"]["commit"]),
             ),
+            "git -C %s checkout -q --detach FETCH_HEAD" % shlex.quote(workspace),
         ])
     exec_("\n".join(lines))
 
