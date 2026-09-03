@@ -594,7 +594,7 @@ def materialize(cycle_name):
                 prepare = run_adapter(descriptor, "prepare", {
                 "protocolVersion": PROTOCOL_VERSION,
                 "cycle": cycle_name, "arm": arm["id"], "workspace": workspace,
-                "configRoot": "%s/configs/%s/%s" % (release, arm["id"], subject_id),
+                "configRoot": "%s/configs/%s" % (release, subject_id),
                 "variant": {
                     "path": to_executor_path(variant_dir(declaration, arm)),
                     "digest": arm["variantDigest"],

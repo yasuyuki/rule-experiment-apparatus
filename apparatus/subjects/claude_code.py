@@ -175,19 +175,24 @@ def prepare(payload, identity):
     if actual_digest != payload["variant"]["digest"]:
         raise SystemExit("variant digest mismatch")
     if os.path.lexists(config_root):
-        raise SystemExit("config root already exists: %s" % config_root)
-    shutil.copytree(
-        settings["configTemplate"], config_root, symlinks=True,
-        ignore=shutil.ignore_patterns(*CREDENTIALS, "projects", "sessions"),
-    )
-    for name in CREDENTIALS:
-        source = settings["credentialSources"][name]
-        if not os.path.exists(source):
-            raise SystemExit("credential source is missing: %s" % name)
-        os.symlink(source, os.path.join(config_root, name))
+        if not os.path.isdir(config_root) or config_digest(config_root) != config_digest(
+            settings["configTemplate"]
+        ):
+            raise SystemExit("config root differs from template: %s" % config_root)
+    else:
+        shutil.copytree(
+            settings["configTemplate"], config_root, symlinks=True,
+            ignore=shutil.ignore_patterns(*CREDENTIALS, "projects", "sessions"),
+        )
+        for name in CREDENTIALS:
+            source = settings["credentialSources"][name]
+            if not os.path.exists(source):
+                raise SystemExit("credential source is missing: %s" % name)
+            os.symlink(source, os.path.join(config_root, name))
     verify_credential_links(config_root, settings["credentialSources"])
     verify_subscription(settings, config_root)
     verify_credential_links(config_root, settings["credentialSources"])
+    claim_project_directory(config_root, workspace)
 
     renderer(variant, "render", workspace)
     marker = "[rule-experiment-loaded:%s]" % payload["cycle"]
@@ -263,6 +268,25 @@ def session_path(config_root, path):
     return os.path.relpath(path, config_root).replace(os.sep, "/")
 
 
+def project_directory(config_root, workspace):
+    name = re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(workspace))
+    return os.path.join(config_root, "projects", name)
+
+
+def claim_project_directory(config_root, workspace):
+    root = project_directory(config_root, workspace)
+    os.makedirs(root, exist_ok=True)
+    marker = os.path.join(root, ".rule-experiment-workspace")
+    identity = hashlib.sha256(os.path.abspath(workspace).encode("utf-8")).hexdigest()
+    if os.path.lexists(marker):
+        with open(marker, encoding="utf-8") as handle:
+            if handle.read() != identity + "\n":
+                raise SystemExit("Claude project directory collision between workspaces")
+    else:
+        with open(marker, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(identity + "\n")
+
+
 def redact_paths(text, paths):
     for path in sorted({path for path in paths if path}, key=len, reverse=True):
         text = text.replace(path, "[redacted-path]")
@@ -274,7 +298,9 @@ def transcript_evidence(config_root, workspace, marker):
     documents, skills = {}, {}
     assistant_count = marker_count = tool_use_count = 0
     usage, session_records = {}, []
-    paths = sorted(glob.glob(os.path.join(config_root, "projects", "**", "*.jsonl"), recursive=True))
+    paths = sorted(glob.glob(
+        os.path.join(project_directory(config_root, workspace), "**", "*.jsonl"), recursive=True
+    ))
     for path in paths:
         first_timestamp = last_timestamp = None
         with open(path, encoding="utf-8", errors="replace") as handle:

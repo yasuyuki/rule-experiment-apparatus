@@ -100,8 +100,9 @@ fi
         commit(root, "base")
         return root
 
-    def prepare(name, materials=()):
-        root, config = workspace(name), temp / (name + "-config")
+    def prepare(name, materials=(), config=None, check=True):
+        root = workspace(name)
+        config = config or temp / (name + "-config")
         payload = {
             "protocolVersion": 1, "cycle": "fixture", "arm": name,
             "workspace": str(root), "configRoot": str(config),
@@ -110,8 +111,9 @@ fi
             "materials": list(materials),
             "profile": profile,
         }
-        result = json.loads(run(sys.executable, str(ADAPTER), "prepare",
-                                stdin=json.dumps(payload)).stdout)
+        completed = run(sys.executable, str(ADAPTER), "prepare", check=check,
+                        stdin=json.dumps(payload))
+        result = json.loads(completed.stdout) if check else completed
         return root, config, result
 
     shortstat_workspace = workspace("shortstat-empty")
@@ -121,8 +123,12 @@ fi
     }
 
     workspace_a, config_a, prepared_a = prepare("arm-a")
-    workspace_b, config_b, prepared_b = prepare("arm-b")
+    workspace_b, config_b, prepared_b = prepare("arm-b", config=config_a)
+    assert config_a == config_b
     assert prepared_a["configIdentity"] == prepared_b["configIdentity"]
+    _, _, collision = prepare("arm_a", config=config_a, check=False)
+    assert collision.returncode != 0
+    assert "Claude project directory collision between workspaces" in collision.stderr
     assert prepared_a["variantDigest"] == digest
     assert "launcher" in prepared_a["launch"]
     assert "--add-dir" not in prepared_a["launch"]
@@ -142,7 +148,7 @@ fi
     commit(workspace_a, "workload")
     marker = prepared_a["token"]["marker"]
     phase = workspace_a / ".claude" / "plan-phases" / "fixture" / "phase-01.md"
-    transcript = config_a / "projects" / "fixture" / "session.jsonl"
+    transcript = Path(claude_code.project_directory(str(config_a), str(workspace_a))) / "session.jsonl"
     write(transcript, json.dumps({
         "timestamp": "2026-01-02T03:04:05.000Z",
         "type": "assistant",
@@ -177,6 +183,17 @@ fi
         "type": "user",
         "message": {"content": "ignored"},
     }) + "\n")
+    commit(workspace_b, "variant injection")
+    write(workspace_b / "result.txt", "done\n")
+    commit(workspace_b, "workload")
+    transcript_b = Path(claude_code.project_directory(
+        str(config_b), str(workspace_b)
+    )) / "session.jsonl"
+    write(transcript_b, json.dumps({
+        "timestamp": "2026-01-02T04:00:00.000Z",
+        "type": "assistant",
+        "message": {"content": prepared_b["token"]["marker"], "usage": {"input_tokens": 99}},
+    }) + "\n")
     collected = json.loads(run(sys.executable, str(ADAPTER), "collect", stdin=json.dumps({
         "protocolVersion": 1, "cycle": "fixture", "arm": "arm-a",
         "workspace": str(workspace_a), "profile": profile, "token": prepared_a["token"],
@@ -188,7 +205,7 @@ fi
     assert phase_evidence.startswith("```console")
     assert "[redacted-path]" in phase_evidence
     assert evidence["sessions"] == [{
-        "path": "projects/fixture/session.jsonl",
+        "path": claude_code.session_path(str(config_a), str(transcript)),
         "firstTimestamp": "2026-01-02T03:04:05.000Z",
         "lastTimestamp": "2026-01-02T03:06:07.000Z",
     }]
@@ -206,6 +223,17 @@ fi
     # separates "the skill changed nothing" from "the skill never ran". The name is
     # subject-supplied, so anything but a bare identifier is dropped.
     assert evidence["skillInvocations"] == {"demo-skill": 2}
+    collected_b = json.loads(run(sys.executable, str(ADAPTER), "collect", stdin=json.dumps({
+        "protocolVersion": 1, "cycle": "fixture", "arm": "arm-b",
+        "workspace": str(workspace_b), "profile": profile, "token": prepared_b["token"],
+    })).stdout)
+    assert collected_b["evidence"]["sessions"] == [{
+        "path": claude_code.session_path(str(config_b), str(transcript_b)),
+        "firstTimestamp": "2026-01-02T04:00:00.000Z",
+        "lastTimestamp": "2026-01-02T04:00:00.000Z",
+    }]
+    assert collected_b["evidence"]["assistantCount"] == 1
+    assert collected_b["evidence"]["usage"] == {"input_tokens": 99}
     assert str(temp) not in json.dumps(collected["evidence"])
     assert str(config_a) not in json.dumps(collected["evidence"])
     assert not any(source in json.dumps(collected["evidence"]) for source in native_sources.values())

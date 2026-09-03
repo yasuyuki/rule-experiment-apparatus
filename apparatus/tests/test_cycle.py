@@ -140,7 +140,9 @@ if sys.argv[1] == "prepare":
         "protocolVersion": 1, "adapterIdentity": identity, "subjectVersion": "fake-1",
         "configIdentity": "c" * 64, "variantDigest": payload["variant"]["digest"],
         "placements": [{"path": ".rules/demo.txt", "sha256": digest}],
-        "launch": "fake " + payload["workspace"], "token": {"workspace": payload["workspace"]},
+        "launch": "fake " + payload["workspace"], "token": {
+            "workspace": payload["workspace"], "configRoot": payload["configRoot"],
+        },
     }
 elif sys.argv[1] == "collect":
     workspace = payload["token"]["workspace"]
@@ -438,6 +440,11 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         assert (runs / "fixture" / "treatment" / ".rules" / "demo.txt").read_text() == "new\n"
         assert Path(cycle.state_path("fixture")).is_file()
         state_before_review = json.loads(Path(cycle.state_path("fixture")).read_text(encoding="utf-8"))
+        config_roots = {
+            subject["prepare"]["token"]["configRoot"]
+            for arm in state_before_review["arms"] for subject in arm["subjects"]
+        }
+        assert config_roots == {str(runs / "fixture" / "configs" / "fake")}
         materialized = runs / "fixture" / "materials" / "reference"
         assert (materialized / "reference.md").read_text() == "material\n"
         assert git_value(materialized, "rev-parse", "HEAD") == material_commit
