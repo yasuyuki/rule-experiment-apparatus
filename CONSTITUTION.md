@@ -34,7 +34,7 @@ sanitized evidence reference を所有します。
    を宣言と照合する。
 3. adapter は versioned entrypoint であり、descriptor の SHA-256 と実ファイルを一致させる。
 4. adapter の `prepare` / `collect` 応答を schema 検証し、同じ adapter identity を返させる。
-5. adapter の一時応答は単一 review record へ digest として取り込み、その後削除する。
+5. adapter の応答は sanitized JSON として単一 review record へ逐語で取り込み、一時 state はその後削除する。
 6. review は declaration、base、workload、evaluation、adapter 応答、各 arm の criteria、verdict、
    treatment digest を1件にまとめる。
 7. `promote` は review の treatment digest と現在の source bytes が一致するときだけ実行する。

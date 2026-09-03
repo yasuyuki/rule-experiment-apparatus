@@ -30,6 +30,14 @@ CONSTITUTIONAL = ("CONSTITUTION.md", "docs/IMPROVEMENT-POLICY.md")
 HISTORICAL_HEADING = "### Historical"
 HISTORICAL_MARK = "現行の作業指示に使わない"
 HISTORICAL_MARK_LINES = 15
+REQUIRED_RECORDING_STATEMENTS = {
+    "CONSTITUTION.md": (
+        "adapter の応答は sanitized JSON として単一 review record へ逐語で取り込み、一時 state はその後削除する。",
+    ),
+    "docs/RULE-EXPERIMENT.md": (
+        "Core は sanitized JSON の adapter 応答を単一 review record へ逐語で取り込み、取り込んだ後に一時",
+    ),
+}
 
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 FENCE = re.compile(r"^```", re.MULTILINE)
@@ -107,6 +115,14 @@ def main():
         return 1
 
     index_text = read(INDEX)
+
+    # Invariant 5 and the protocol must agree about retaining the sanitized,
+    # verbatim adapter responses before state deletion. Keep this narrow so the
+    # document checker remains a structure checker rather than a prose linter.
+    for path, statements in REQUIRED_RECORDING_STATEMENTS.items():
+        for statement in statements:
+            if statement not in read(path):
+                problems.append("記録 protocol の表明が無い: %s に %r が無い" % (path, statement))
 
     # 2. 到達可能性（推移的）
     seen, queue = {INDEX}, [INDEX]

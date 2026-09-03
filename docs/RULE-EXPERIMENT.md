@@ -4,7 +4,8 @@
 
 `apparatus/schemas/cycle.schema.json` は measurement cycle だけを許します。宣言は control と
 treatment の2 arm、同じ base、workload、evaluation、subject list と、arm ごとの variant Git
-tree / managed SHA-256 を持ちます。`cycle.py` は source の current bytes と宣言を照合します。
+tree / managed SHA-256 を持ちます。任意の非空 `note` は、何を測り直すか、なぜ cycle を立てたかを
+残します。`cycle.py` は source の current bytes と宣言を照合します。
 
 `materialize` は base も pinned commit だけを arm workspace へ取り出し、history は
 持ち込みません。宣言が base の working tree から取り除いた rule bytes は pin した commit の
@@ -43,12 +44,12 @@ launch 情報、`collect` に返す opaque token です。応答形式は
 ### `collect`
 
 入力は cycle / arm、workspace、opaque profile、`prepare` token です。応答は実行成否、rule
-読み込み成否、sanitized evidence reference です。応答形式は
+読み込み成否、sanitized evidence object です。応答形式は
 `apparatus/schemas/adapter-collect.schema.json` が定めます。
 
-Core は adapter 応答をそのまま公開記録へ複製しません。review へ取り込むのは `prepare` と
-`collect` の canonical JSON digest、adapter identity、`prepare` が報告した subject version の
-3つだけで、取り込んだ後に一時 state を削除します。subject version は arm 間の harness 差を
+Core は sanitized JSON の adapter 応答を単一 review record へ逐語で取り込み、取り込んだ後に一時
+state を削除します。`prepare` token は record に残るため、adapter は credential path を含む key を
+返してはいけません。subject version は arm 間の harness 差を
 後から見つけるための記録であり、取得できたときだけ載る任意 field です。verdict と `promote`
 の条件には入りません（`CONSTITUTION.md` Accepted risk）。
 
@@ -56,12 +57,14 @@ Core は adapter 応答をそのまま公開記録へ複製しません。review
 
 固定 evaluation program は `evaluate` 引数と JSON stdin を受け、arm ごとの同一 criteria を
 返します。各 criterion は number、逐語 text、`met` / `not-met` / `unknown`、sanitized evidence
-reference を持ちます。Treatment の改善が1件以上あり、regression と unknown が無い場合だけ
+reference と、任意の numeric `value` を持ちます。`value` の boolean は numeric value ではありません。
+Treatment の改善が1件以上あり、regression と unknown が無い場合だけ
 review verdict は `promote` です。
 
 `apparatus/schemas/review.schema.json` は declaration digest、base commit、workload / evaluation
-digest、両 arm の variant identity、adapter identity / response digest / subject version、criteria、
-verdict、採用対象 treatment digest を1件に固定します。
+digest、experiment と任意 note、両 arm の variant identity / managed bytes 合計、adapter identity /
+逐語 `prepare` / `collect` / subject version、criteria、verdict、採用対象 treatment digest を1件に
+固定します。
 
 ## Termination
 

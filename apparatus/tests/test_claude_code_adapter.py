@@ -114,6 +114,12 @@ fi
                                 stdin=json.dumps(payload)).stdout)
         return root, config, result
 
+    shortstat_workspace = workspace("shortstat-empty")
+    assert claude_code.git_shortstat(str(shortstat_workspace),
+                                     claude_code.git(str(shortstat_workspace), "rev-parse", "HEAD").stdout.strip()) == {
+        "files": 0, "insertions": 0, "deletions": 0,
+    }
+
     workspace_a, config_a, prepared_a = prepare("arm-a")
     workspace_b, config_b, prepared_b = prepare("arm-b")
     assert prepared_a["configIdentity"] == prepared_b["configIdentity"]
@@ -138,17 +144,38 @@ fi
     phase = workspace_a / ".claude" / "plan-phases" / "fixture" / "phase-01.md"
     transcript = config_a / "projects" / "fixture" / "session.jsonl"
     write(transcript, json.dumps({
+        "timestamp": "2026-01-02T03:04:05.000Z",
         "type": "assistant",
         "message": {"content": [
             {"type": "text", "text": marker},
             {"type": "tool_use", "name": "Write", "input": {
-                "file_path": str(phase), "content": "```console\nsh scripts/check.sh\n```\n"
+                "file_path": str(phase), "content": "```console\nsh scripts/check.sh\n%s\n%s\n```\n" % (
+                    config_a, native_sources[".credentials.json"],
+                )
             }},
             {"type": "tool_use", "name": "Skill", "input": {"skill": "demo-skill"}},
             {"type": "tool_use", "name": "Skill", "input": {"skill": "demo-skill", "args": "full"}},
             {"type": "tool_use", "name": "Skill", "input": {"skill": "/etc/passwd"}},
             {"type": "tool_use", "name": "Skill", "input": {"skill": 7}},
-        ]},
+        ], "usage": {
+            "input_tokens": 3,
+            "output_tokens": 5,
+            "server_tool_use": {"web_search_requests": 2},
+            "ignored": "not-a-number",
+            "boolean": True,
+        }},
+    }) + "\n" + json.dumps({
+        "timestamp": "2026-01-02T03:05:06.000Z",
+        "type": "assistant",
+        "message": {"content": "second assistant", "usage": {
+            "input_tokens": 7,
+            "output_tokens": "not-a-number",
+            "server_tool_use": {"web_search_requests": 1, "ignored": []},
+        }},
+    }) + "\n" + json.dumps({
+        "timestamp": "2026-01-02T03:06:07.000Z",
+        "type": "user",
+        "message": {"content": "ignored"},
     }) + "\n")
     collected = json.loads(run(sys.executable, str(ADAPTER), "collect", stdin=json.dumps({
         "protocolVersion": 1, "cycle": "fixture", "arm": "arm-a",
@@ -156,13 +183,32 @@ fi
     })).stdout)
     assert collected["success"] is True
     assert collected["ruleLoaded"] is True
-    evidence = json.loads(collected["evidence"][0])
-    assert evidence["phaseDocuments"][".claude/plan-phases/fixture/phase-01.md"].startswith("```console")
+    evidence = collected["evidence"]
+    phase_evidence = evidence["phaseDocuments"][".claude/plan-phases/fixture/phase-01.md"]
+    assert phase_evidence.startswith("```console")
+    assert "[redacted-path]" in phase_evidence
+    assert evidence["sessions"] == [{
+        "path": "projects/fixture/session.jsonl",
+        "firstTimestamp": "2026-01-02T03:04:05.000Z",
+        "lastTimestamp": "2026-01-02T03:06:07.000Z",
+    }]
+    assert evidence["assistantCount"] == 2
+    assert evidence["toolUseCount"] == 5
+    assert evidence["usage"] == {
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "server_tool_use": {"web_search_requests": 3},
+    }
+    assert evidence["shortstat"] == {"files": 3, "insertions": 5, "deletions": 0}
+    assert evidence["commitsAfterBase"] == 2
+    assert evidence["clean"] is True
     # A skill only reaches the subject when the subject invokes it, so the count
     # separates "the skill changed nothing" from "the skill never ran". The name is
     # subject-supplied, so anything but a bare identifier is dropped.
     assert evidence["skillInvocations"] == {"demo-skill": 2}
-    assert not any(str(temp) in item for item in collected["evidence"])
+    assert str(temp) not in json.dumps(collected["evidence"])
+    assert str(config_a) not in json.dumps(collected["evidence"])
+    assert not any(source in json.dumps(collected["evidence"]) for source in native_sources.values())
 
     settings = claude_code.profile(profile)
     for invalid in (

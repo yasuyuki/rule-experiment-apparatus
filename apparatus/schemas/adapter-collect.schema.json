@@ -10,10 +10,7 @@
     "adapterIdentity": { "$ref": "#/$defs/sha256" },
     "success": { "type": "boolean" },
     "ruleLoaded": { "type": "boolean" },
-    "evidence": {
-      "type": "array", "uniqueItems": true,
-      "items": { "type": "string", "minLength": 1 }
-    }
+    "evidence": { "type": "object" }
   },
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }

@@ -5,12 +5,14 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schemaVersion", "cycle", "recordedAt", "declarationSha256", "baseCommit",
+    "schemaVersion", "cycle", "experiment", "recordedAt", "declarationSha256", "baseCommit",
     "workloadSha256", "evaluationSha256", "arms", "verdict", "reasons", "treatmentDigest"
   ],
   "properties": {
     "schemaVersion": { "const": 1 },
     "cycle": { "$ref": "#/$defs/identifier" },
+    "experiment": { "$ref": "#/$defs/identifier" },
+    "note": { "type": "string", "minLength": 1 },
     "recordedAt": { "$ref": "#/$defs/timestamp" },
     "declarationSha256": { "$ref": "#/$defs/sha256" },
     "baseCommit": { "$ref": "#/$defs/gitObject" },
@@ -47,11 +49,12 @@
     "timestamp": { "type": "string", "format": "date-time" },
     "subject": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "adapterIdentity", "adapterResponseDigest"],
+      "required": ["id", "adapterIdentity", "prepare", "collect"],
       "properties": {
         "id": { "$ref": "#/$defs/identifier" },
         "adapterIdentity": { "$ref": "#/$defs/sha256" },
-        "adapterResponseDigest": { "$ref": "#/$defs/sha256" },
+        "prepare": { "type": "object" },
+        "collect": { "type": "object" },
         "subjectVersion": { "type": "string", "minLength": 1 }
       }
     },
@@ -62,18 +65,20 @@
         "criterion": { "type": "integer", "minimum": 1 },
         "text": { "type": "string", "minLength": 1 },
         "result": { "enum": ["met", "not-met", "unknown"] },
-        "evidence": { "type": "string", "minLength": 1 }
+        "evidence": { "type": "string", "minLength": 1 },
+        "value": { "type": "number" }
       }
     },
     "arm": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "role", "variant", "variantTree", "variantDigest", "subjects", "criteria"],
+      "required": ["id", "role", "variant", "variantTree", "variantDigest", "variantBytes", "subjects", "criteria"],
       "properties": {
         "id": { "$ref": "#/$defs/identifier" },
         "role": { "enum": ["control", "treatment"] },
         "variant": { "$ref": "#/$defs/identifier" },
         "variantTree": { "$ref": "#/$defs/gitObject" },
         "variantDigest": { "$ref": "#/$defs/sha256" },
+        "variantBytes": { "type": "integer", "minimum": 0 },
         "subjects": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/subject" } },
         "criteria": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/criterion" } }
       }

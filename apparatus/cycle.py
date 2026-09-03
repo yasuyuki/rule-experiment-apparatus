@@ -3,9 +3,11 @@
 
 import argparse
 import contextlib
+import copy
 import datetime
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -75,14 +77,6 @@ def sha256_file(path):
         for chunk in iter(lambda: handle.read(65536), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def canonical_bytes(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-
-
-def content_hash(value):
-    return hashlib.sha256(canonical_bytes(value)).hexdigest()
 
 
 def atomic_write_json(path, payload):
@@ -342,6 +336,7 @@ def variant_dir(declaration, arm):
 
 def managed_digest(root):
     digest = hashlib.sha256()
+    total_bytes = 0
     for relative in MANAGED_ITEMS:
         path = os.path.join(root, relative.replace("/", os.sep))
         if not os.path.exists(path):
@@ -359,8 +354,9 @@ def managed_digest(root):
             with open(filename, "rb") as handle:
                 for chunk in iter(lambda: handle.read(65536), b""):
                     digest.update(chunk)
+                    total_bytes += len(chunk)
             digest.update(b"\0")
-    return digest.hexdigest()
+    return digest.hexdigest(), total_bytes
 
 
 def git_source(*args):
@@ -374,7 +370,7 @@ def verify_canonical(declaration, arm):
         problems.append("variant tree mismatch for %s" % arm["id"])
     if git_source("status", "--porcelain", "--", relative).strip():
         problems.append("canonical variant is dirty for %s" % arm["id"])
-    if managed_digest(variant_dir(declaration, arm)) != arm["variantDigest"]:
+    if managed_digest(variant_dir(declaration, arm))[0] != arm["variantDigest"]:
         problems.append("variant digest mismatch for %s" % arm["id"])
     return problems
 
@@ -643,16 +639,22 @@ def _validate_evaluation_output(payload, declaration):
     actual = {arm.get("id") for arm in payload["arms"] if isinstance(arm, dict)}
     if actual != expected or len(payload["arms"]) != 2:
         raise SystemExit("evaluation output arm ids do not match declaration")
-    allowed = {"criterion", "text", "result", "evidence"}
+    allowed = {"criterion", "text", "result", "evidence", "value"}
     for arm in payload["arms"]:
         if set(arm) != {"id", "criteria"} or not isinstance(arm["criteria"], list) or not arm["criteria"]:
             raise SystemExit("evaluation arm must contain id and non-empty criteria")
         for criterion in arm["criteria"]:
             if (
-                not isinstance(criterion, dict) or set(criterion) != allowed
+                not isinstance(criterion, dict) or not {"criterion", "text", "result", "evidence"} <= set(criterion)
+                or not set(criterion) <= allowed
                 or not isinstance(criterion["criterion"], int) or criterion["criterion"] < 1
                 or not all(isinstance(criterion[key], str) and criterion[key] for key in ("text", "evidence"))
                 or criterion["result"] not in ("met", "not-met", "unknown")
+                or ("value" in criterion and (
+                    isinstance(criterion["value"], bool)
+                    or not isinstance(criterion["value"], (int, float))
+                    or not math.isfinite(criterion["value"])
+                ))
             ):
                 raise SystemExit("invalid evaluation criterion: %r" % criterion)
     return {arm["id"]: arm["criteria"] for arm in payload["arms"]}
@@ -692,6 +694,13 @@ def _review(cycle_name, declaration):
     validate_comparison(declaration)
     artifact_path(declaration, "workload")
     evaluation_path = artifact_path(declaration, "evaluation")
+    variant_measurements = {
+        arm["id"]: managed_digest(variant_dir(declaration, arm))
+        for arm in declaration["arms"]
+    }
+    for arm in declaration["arms"]:
+        if variant_measurements[arm["id"]][0] != arm["variantDigest"]:
+            raise SystemExit("variant digest mismatch for %s" % arm["id"])
     output = os.path.join(CONTROL_DIR, "reviews", "%s.json" % cycle_name)
     if os.path.exists(output):
         raise SystemExit("review already exists: %s" % output)
@@ -730,10 +739,9 @@ def _review(cycle_name, declaration):
                 adapter_reasons.append("%s/%s execution failed" % (arm["id"], subject_id))
             if not collect["ruleLoaded"]:
                 adapter_reasons.append("%s/%s did not prove rule loading" % (arm["id"], subject_id))
-            response_digest = content_hash({"prepare": prepare, "collect": collect})
             public_subjects.append({
                 "id": subject_id, "adapterIdentity": descriptor["adapter"]["sha256"],
-                "adapterResponseDigest": response_digest,
+                "prepare": prepare, "collect": collect,
                 "subjectVersion": prepare["subjectVersion"],
             })
             evaluation_subjects.append({
@@ -774,7 +782,7 @@ def _review(cycle_name, declaration):
     reasons = adapter_reasons + criteria_reasons(criteria, declaration)
     treatment = next(arm for arm in declaration["arms"] if arm["role"] == "treatment")
     record = {
-        "schemaVersion": 1, "cycle": cycle_name,
+        "schemaVersion": 1, "cycle": cycle_name, "experiment": declaration["experiment"],
         "recordedAt": datetime.datetime.now().astimezone().isoformat(),
         "declarationSha256": declaration_sha, "baseCommit": declaration["base"]["commit"],
         "workloadSha256": declaration["workload"]["sha256"],
@@ -783,6 +791,7 @@ def _review(cycle_name, declaration):
             {
                 "id": arm["id"], "role": arm["role"], "variant": arm["variant"],
                 "variantTree": arm["variantTree"], "variantDigest": arm["variantDigest"],
+                "variantBytes": variant_measurements[arm["id"]][1],
                 "subjects": review_subjects[arm["id"]], "criteria": criteria[arm["id"]],
             }
             for arm in declaration["arms"]
@@ -792,6 +801,8 @@ def _review(cycle_name, declaration):
     }
     if materials_declared(declaration):
         record["materials"] = materials_fingerprint(declaration)
+    if "note" in declaration:
+        record["note"] = declaration["note"]
     validate_against_schema(record, "review.schema.json", "review %s" % cycle_name)
     atomic_write_json(output, record)
     os.unlink(temporary)
@@ -828,14 +839,36 @@ def rollback_path(cycle_name):
     return os.path.join(CONTROL_DIR, "rollbacks", "%s.json" % cycle_name)
 
 
+def review_for_schema_validation(record, declaration):
+    """Map an immutable digest-era review onto fields irrelevant to promotion."""
+    if "experiment" in record:
+        return record
+    candidate = copy.deepcopy(record)
+    candidate["experiment"] = declaration["experiment"]
+    for arm in candidate.get("arms", []):
+        arm["variantBytes"] = 0
+        for subject in arm.get("subjects", []):
+            digest = subject.pop("adapterResponseDigest", None)
+            if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                return record
+            subject["prepare"] = {}
+            subject["collect"] = {}
+    return candidate
+
+
 def promotion_reasons(cycle_name, declaration, record):
     reasons = []
     try:
-        validate_against_schema(record, "review.schema.json", "review %s" % cycle_name)
+        validate_against_schema(
+            review_for_schema_validation(record, declaration),
+            "review.schema.json", "review %s" % cycle_name,
+        )
     except SystemExit as error:
         return [str(error)]
     if record["cycle"] != cycle_name:
         reasons.append("review cycle differs from declaration")
+    if record.get("experiment", declaration["experiment"]) != declaration["experiment"]:
+        reasons.append("experiment differs between declaration and review")
     if record["declarationSha256"] != sha256_file(cycle_path(cycle_name)):
         reasons.append("declaration changed after review")
     if record["baseCommit"] != declaration["base"]["commit"]:
@@ -868,11 +901,11 @@ def promote(cycle_name):
         review_record = json.load(handle)
     review_sha = sha256_file(review_file)
     source = variant_dir(declaration, treatment)
-    target_digest = managed_digest(source)
+    target_digest = managed_digest(source)[0]
     stable = stable_rules_root()
     branch = load_environment()["stableRules"]["branch"]
     old_head = git_host(stable, "rev-parse", "HEAD").stdout.strip()
-    old_digest = managed_digest(stable)
+    old_digest = managed_digest(stable)[0]
     output = promotion_path(cycle_name)
     if os.path.exists(output):
         with open(output, encoding="utf-8") as handle:
@@ -892,7 +925,7 @@ def promote(cycle_name):
             git_host(stable, "merge", "--ff-only", record["newStableCommit"])
         elif old_head != record["newStableCommit"]:
             raise SystemExit("stable HEAD does not match prepared promotion")
-        if managed_digest(stable) != record["treatmentDigest"]:
+        if managed_digest(stable)[0] != record["treatmentDigest"]:
             raise SystemExit("stable bytes differ from prepared promotion")
         record["status"] = "promoted"
         record["recordedAt"] = datetime.datetime.now().astimezone().isoformat()
@@ -924,7 +957,7 @@ def promote(cycle_name):
         git_host(stable, "worktree", "add", "--detach", temporary, branch)
         try:
             sync_managed(source, temporary)
-            if managed_digest(temporary) != target_digest:
+            if managed_digest(temporary)[0] != target_digest:
                 raise SystemExit("managed source digest mismatch after sync")
             renderer_and_stable_tests(temporary)
         except SystemExit as error:
@@ -942,7 +975,7 @@ def promote(cycle_name):
         validate_against_schema(record, "promotion.schema.json", "promotion %s" % cycle_name)
         atomic_write_json(output, record)
         git_host(stable, "merge", "--ff-only", new_head)
-        if managed_digest(stable) != target_digest:
+        if managed_digest(stable)[0] != target_digest:
             raise SystemExit("stable bytes differ after promotion")
         record["status"] = "promoted"
         record["recordedAt"] = datetime.datetime.now().astimezone().isoformat()
@@ -979,7 +1012,7 @@ def rollback(cycle_name):
             git_host(stable, "merge", "--ff-only", record["newStableCommit"])
         elif head != record["newStableCommit"]:
             raise SystemExit("stable HEAD does not match prepared rollback")
-        if managed_digest(stable) != record["restoredManagedDigest"]:
+        if managed_digest(stable)[0] != record["restoredManagedDigest"]:
             raise SystemExit("stable bytes differ from prepared rollback")
         record["status"] = "rolled-back"
         record["recordedAt"] = datetime.datetime.now().astimezone().isoformat()
@@ -994,7 +1027,7 @@ def rollback(cycle_name):
     try:
         git_host(stable, "worktree", "add", "--detach", temporary, head)
         git_host(temporary, "revert", "--no-edit", promotion["newStableCommit"])
-        if managed_digest(temporary) != promotion["oldManagedDigest"]:
+        if managed_digest(temporary)[0] != promotion["oldManagedDigest"]:
             raise SystemExit("rollback did not restore prior bytes")
         renderer_and_stable_tests(temporary)
         new_head = git_host(temporary, "rev-parse", "HEAD").stdout.strip()

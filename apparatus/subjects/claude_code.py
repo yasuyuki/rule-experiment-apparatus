@@ -4,6 +4,7 @@
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -236,21 +237,67 @@ def phase_path(workspace, value):
     return candidate if PHASE_RE.fullmatch(candidate) else None
 
 
+def add_usage(total, value):
+    """Accumulate the numeric leaves of Claude's nested message.usage object."""
+    if not isinstance(value, dict):
+        return
+    for key, child in value.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(child, dict):
+            nested = total.get(key)
+            if not isinstance(nested, dict):
+                nested = {}
+                total[key] = nested
+            add_usage(nested, child)
+        elif (
+            isinstance(child, (int, float))
+            and not isinstance(child, bool)
+            and math.isfinite(child)
+        ):
+            existing = total.get(key, 0)
+            total[key] = (existing if isinstance(existing, (int, float)) else 0) + child
+
+
+def session_path(config_root, path):
+    return os.path.relpath(path, config_root).replace(os.sep, "/")
+
+
+def redact_paths(text, paths):
+    for path in sorted({path for path in paths if path}, key=len, reverse=True):
+        text = text.replace(path, "[redacted-path]")
+        text = text.replace(path.replace(os.sep, "/"), "[redacted-path]")
+    return text
+
+
 def transcript_evidence(config_root, workspace, marker):
     documents, skills = {}, {}
-    assistant_count = marker_count = 0
-    sessions = sorted(glob.glob(os.path.join(config_root, "projects", "*", "*.jsonl")))
-    for path in sessions:
+    assistant_count = marker_count = tool_use_count = 0
+    usage, session_records = {}, []
+    paths = sorted(glob.glob(os.path.join(config_root, "projects", "**", "*.jsonl"), recursive=True))
+    for path in paths:
+        first_timestamp = last_timestamp = None
         with open(path, encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 try:
                     item = json.loads(line)
                 except ValueError:
                     continue
-                if not isinstance(item, dict) or item.get("type") != "assistant":
+                if not isinstance(item, dict):
+                    continue
+                timestamp = item.get("timestamp")
+                if isinstance(timestamp, str) and timestamp:
+                    if first_timestamp is None:
+                        first_timestamp = timestamp
+                    last_timestamp = timestamp
+                if item.get("type") != "assistant":
                     continue
                 assistant_count += 1
-                content = (item.get("message") or {}).get("content")
+                message = item.get("message")
+                if not isinstance(message, dict):
+                    continue
+                add_usage(usage, message.get("usage"))
+                content = message.get("content")
                 if isinstance(content, str):
                     marker_count += content.count(marker)
                     continue
@@ -262,7 +309,10 @@ def transcript_evidence(config_root, workspace, marker):
                     if block.get("type") == "text" and isinstance(block.get("text"), str):
                         marker_count += block["text"].count(marker)
                         continue
-                    if block.get("type") != "tool_use" or not isinstance(block.get("input"), dict):
+                    if block.get("type") != "tool_use":
+                        continue
+                    tool_use_count += 1
+                    if not isinstance(block.get("input"), dict):
                         continue
                     args = block["input"]
                     if block.get("name") == "Skill":
@@ -284,7 +334,26 @@ def transcript_evidence(config_root, workspace, marker):
                         old, new = args.get("old_string"), args.get("new_string")
                         if isinstance(old, str) and isinstance(new, str) and old in documents[relative]:
                             documents[relative] = documents[relative].replace(old, new, 1)
-    return sessions, assistant_count, marker_count, documents, skills
+        session_records.append({
+            "path": session_path(config_root, path),
+            "firstTimestamp": first_timestamp,
+            "lastTimestamp": last_timestamp,
+        })
+    return session_records, assistant_count, marker_count, tool_use_count, documents, skills, usage
+
+
+def git_shortstat(root, base_head):
+    output = git(root, "diff", "--shortstat", "%s..HEAD" % base_head).stdout
+    fields = {"files": 0, "insertions": 0, "deletions": 0}
+    for name, pattern in (
+        ("files", r"(\d+) files? changed"),
+        ("insertions", r"(\d+) insertions?\(\+\)"),
+        ("deletions", r"(\d+) deletions?\(-\)"),
+    ):
+        match = re.search(pattern, output)
+        if match:
+            fields[name] = int(match.group(1))
+    return fields
 
 
 def collect(payload, identity):
@@ -294,28 +363,36 @@ def collect(payload, identity):
     workspace, config_root = token["workspace"], token["configRoot"]
     settings = profile(payload["profile"])
     verify_credential_links(config_root, settings["credentialSources"])
-    sessions, assistants, markers, documents, skills = transcript_evidence(
+    sessions, assistants, markers, tool_uses, documents, skills, usage = transcript_evidence(
         config_root, workspace, token["marker"]
     )
+    private_paths = [config_root] + list(settings["credentialSources"].values())
+    documents = {
+        path: redact_paths(content, private_paths)
+        for path, content in documents.items()
+    }
     clean = not git(workspace, "status", "--porcelain").stdout.strip()
     commits = int(git(workspace, "rev-list", "--count", "%s..HEAD" % token["baseHead"]).stdout)
     verified = renderer(token["variantPath"], "verify", workspace, check=False).returncode == 0
-    evidence = json.dumps({
+    evidence = {
         "kind": EVIDENCE_KIND,
+        "sessions": sessions,
         "assistantCount": assistants,
+        "toolUseCount": tool_uses,
         "markerCount": markers,
         "phaseDocuments": documents,
-        "sessionCount": len(sessions),
         "skillInvocations": skills,
+        "usage": usage,
+        "shortstat": git_shortstat(workspace, token["baseHead"]),
         "clean": clean,
         "commitsAfterBase": commits,
-    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    }
     return {
         "protocolVersion": 1,
         "adapterIdentity": identity,
         "success": bool(sessions) and assistants > 0 and clean and commits >= 2,
         "ruleLoaded": verified and markers > 0,
-        "evidence": [evidence],
+        "evidence": evidence,
     }
 
 
