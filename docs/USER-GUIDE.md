@@ -21,6 +21,16 @@ python3 apparatus/cycle.py --environment <environment.json> promote --cycle <cyc
 python3 apparatus/cycle.py --environment <environment.json> rollback --cycle <cycle>
 ```
 
+workload を続けない未 review cycle は、理由を付けて終端します。同一 status・reason・declaration
+digest での再実行だけが成功し、record は変更されません。終端した cycle は materialize、review、
+promote できません。既に review のある cycle は terminate できません。`terminate` は runtime
+`.adapter-state` を削除しないため、必要な調査はその state と arm を読み取りで行えます。
+同じ cycle の materialize、review、terminate が既に進行中なら、待機せず明示的に拒否されます。
+
+```console
+python3 apparatus/cycle.py --environment <environment.json> terminate --cycle <cycle> --status abandoned --reason "operator stopped the run"
+```
+
 失敗した cycle の declaration、arm、review は編集しません。修正後は新しい cycle id で再実行します。
 
 `promote` は treatment variant の、cycle 宣言時に凍結した bytes を stable へ載せます。

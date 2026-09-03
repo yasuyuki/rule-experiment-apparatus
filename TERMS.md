@@ -17,4 +17,5 @@
 | `materialize` | base から2 arm を作り、各 adapter の `prepare` を呼ぶ |
 | `review` | 各 adapter の `collect` と固定 evaluation を実行し、review record を作る |
 | `promote` | 評価済み treatment bytes を baseline へ反映する |
+| `terminate` | 未 review cycle を abandoned または failed として immutable record に終端する |
 | `rollback` | 最新 promotion commit を revert し、直前の managed digest を復元する |

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Materialize, review, promote, and roll back rule experiments."""
+"""Materialize, review, promote, terminate, and roll back rule experiments."""
 
 import argparse
+import contextlib
 import datetime
 import hashlib
 import json
@@ -188,6 +189,47 @@ def cycle_path(name):
     return os.path.join(CYCLES_DIR, "%s.json" % name)
 
 
+def termination_path(cycle_name):
+    validate_identifier("cycle", cycle_name)
+    return os.path.join(CONTROL_DIR, "terminations", "%s.json" % cycle_name)
+
+
+@contextlib.contextmanager
+def cycle_lock(cycle_name):
+    """Hold a non-blocking, OS-released lock for one cycle transition."""
+    validate_identifier("cycle", cycle_name)
+    path = os.path.join(CONTROL_DIR, ".cycle-locks", "%s.lock" % cycle_name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a+", encoding="utf-8") as handle:
+        if os.name == "posix":
+            import fcntl
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                raise SystemExit("cycle operation already in progress: %s" % cycle_name)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            return
+        import msvcrt
+        handle.seek(0)
+        if not handle.read(1):
+            handle.seek(0)
+            handle.write("0")
+            handle.flush()
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            raise SystemExit("cycle operation already in progress: %s" % cycle_name)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 def load_cycle(name):
     path = cycle_path(name)
     if not os.path.isfile(path):
@@ -201,6 +243,53 @@ def load_cycle(name):
     if len(ids) != len(set(ids)):
         raise SystemExit("cycle has duplicate arm ids: %s" % name)
     return declaration
+
+
+def termination_record(cycle_name):
+    """Return the immutable termination record when this cycle has one."""
+    path = termination_path(cycle_name)
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8") as handle:
+        record = json.load(handle)
+    validate_against_schema(record, "termination.schema.json", "termination %s" % cycle_name)
+    if record["cycle"] != cycle_name:
+        raise SystemExit("termination cycle does not match filename: %s" % path)
+    return record
+
+
+def reject_terminated(cycle_name):
+    record = termination_record(cycle_name)
+    if record is not None:
+        raise SystemExit("cycle is terminated: %s (%s)" % (cycle_name, record["status"]))
+
+
+def terminate(cycle_name, status, reason):
+    load_cycle(cycle_name)
+    with cycle_lock(cycle_name):
+        review_file = os.path.join(CONTROL_DIR, "reviews", "%s.json" % cycle_name)
+        if os.path.exists(review_file):
+            raise SystemExit("review already exists; cannot terminate cycle: %s" % cycle_name)
+        if not reason.strip():
+            raise SystemExit("termination reason must not be empty")
+        path = termination_path(cycle_name)
+        requested = {
+            "schemaVersion": 1,
+            "cycle": cycle_name,
+            "status": status,
+            "reason": reason,
+            "declarationSha256": sha256_file(cycle_path(cycle_name)),
+        }
+        existing = termination_record(cycle_name)
+        if existing is not None:
+            if any(existing[key] != requested[key] for key in requested):
+                raise SystemExit("termination record differs from requested payload: %s" % path)
+            print("already terminated: %s (%s)" % (cycle_name, status))
+            return
+        record = dict(requested, recordedAt=datetime.datetime.now().astimezone().isoformat())
+        validate_against_schema(record, "termination.schema.json", "termination %s" % cycle_name)
+        atomic_write_json(path, record)
+        print("terminated: %s (%s)" % (cycle_name, status))
 
 
 def _safe_relative_path(value, label):
@@ -484,27 +573,29 @@ def _clone_materials(declaration, materials):
 
 def materialize(cycle_name):
     declaration = load_cycle(cycle_name)
-    validate_comparison(declaration)
-    base = resolve_base(declaration)
-    materials = resolve_materials(declaration)
-    workload = artifact_path(declaration, "workload")
-    artifact_path(declaration, "evaluation")
-    problems = [problem for arm in declaration["arms"] for problem in verify_canonical(declaration, arm)]
-    if problems:
-        raise SystemExit("\n".join(problems))
-    output = state_path(cycle_name)
-    if os.path.exists(output):
-        raise SystemExit("adapter state already exists: %s" % output)
-    _clone_arms(declaration, base)
-    _clone_materials(declaration, materials)
-    release = release_path(cycle_name)
-    state_arms = []
-    for arm in declaration["arms"]:
-        workspace = "%s/%s" % (release, arm["id"])
-        subjects = []
-        for subject_id in declaration["subjects"]:
-            descriptor = load_subject(subject_id)
-            prepare = run_adapter(descriptor, "prepare", {
+    with cycle_lock(cycle_name):
+        reject_terminated(cycle_name)
+        validate_comparison(declaration)
+        base = resolve_base(declaration)
+        materials = resolve_materials(declaration)
+        workload = artifact_path(declaration, "workload")
+        artifact_path(declaration, "evaluation")
+        problems = [problem for arm in declaration["arms"] for problem in verify_canonical(declaration, arm)]
+        if problems:
+            raise SystemExit("\n".join(problems))
+        output = state_path(cycle_name)
+        if os.path.exists(output):
+            raise SystemExit("adapter state already exists: %s" % output)
+        _clone_arms(declaration, base)
+        _clone_materials(declaration, materials)
+        release = release_path(cycle_name)
+        state_arms = []
+        for arm in declaration["arms"]:
+            workspace = "%s/%s" % (release, arm["id"])
+            subjects = []
+            for subject_id in declaration["subjects"]:
+                descriptor = load_subject(subject_id)
+                prepare = run_adapter(descriptor, "prepare", {
                 "protocolVersion": PROTOCOL_VERSION,
                 "cycle": cycle_name, "arm": arm["id"], "workspace": workspace,
                 "configRoot": "%s/configs/%s/%s" % (release, arm["id"], subject_id),
@@ -521,28 +612,28 @@ def materialize(cycle_name):
                     for material in materials
                 ],
                 "profile": subject_profile(descriptor),
-            })
-            if prepare["variantDigest"] != arm["variantDigest"]:
-                raise SystemExit("adapter placed unexpected variant bytes for %s/%s" % (arm["id"], subject_id))
-            subjects.append({"id": subject_id, "prepare": prepare})
-            print("%s/%s: %s" % (arm["id"], subject_id, prepare["launch"]))
-        exec_(
+                })
+                if prepare["variantDigest"] != arm["variantDigest"]:
+                    raise SystemExit("adapter placed unexpected variant bytes for %s/%s" % (arm["id"], subject_id))
+                subjects.append({"id": subject_id, "prepare": prepare})
+                print("%s/%s: %s" % (arm["id"], subject_id, prepare["launch"]))
+            exec_(
             "set -eu\n"
             "git -C %(workspace)s add -A -f\n"
             "if git -C %(workspace)s diff --cached --quiet; then echo 'adapter placed no rule bytes' >&2; exit 1; fi\n"
             "git -C %(workspace)s commit -q -m %(message)s"
             % {"workspace": shlex.quote(workspace), "message": shlex.quote("variant %s" % arm["variant"])}
-        )
-        injection = exec_("git -C %s rev-parse HEAD" % shlex.quote(workspace)).strip()
-        state_arms.append({
-            "id": arm["id"], "workspace": workspace,
-            "injectionCommit": injection, "subjects": subjects,
+            )
+            injection = exec_("git -C %s rev-parse HEAD" % shlex.quote(workspace)).strip()
+            state_arms.append({
+                "id": arm["id"], "workspace": workspace,
+                "injectionCommit": injection, "subjects": subjects,
+            })
+        atomic_write_json(output, {
+            "schemaVersion": 1, "cycle": cycle_name,
+            "declarationSha256": sha256_file(cycle_path(cycle_name)), "arms": state_arms,
         })
-    atomic_write_json(output, {
-        "schemaVersion": 1, "cycle": cycle_name,
-        "declarationSha256": sha256_file(cycle_path(cycle_name)), "arms": state_arms,
-    })
-    print("materialized: %s" % release)
+        print("materialized: %s" % release)
 
 
 def _validate_evaluation_output(payload, declaration):
@@ -592,6 +683,12 @@ def criteria_reasons(criteria_by_arm, declaration):
 
 def review(cycle_name):
     declaration = load_cycle(cycle_name)
+    with cycle_lock(cycle_name):
+        return _review(cycle_name, declaration)
+
+
+def _review(cycle_name, declaration):
+    reject_terminated(cycle_name)
     validate_comparison(declaration)
     artifact_path(declaration, "workload")
     evaluation_path = artifact_path(declaration, "evaluation")
@@ -762,6 +859,7 @@ def promotion_reasons(cycle_name, declaration, record):
 
 def promote(cycle_name):
     declaration = load_cycle(cycle_name)
+    reject_terminated(cycle_name)
     treatment = next(arm for arm in declaration["arms"] if arm["role"] == "treatment")
     review_file = os.path.join(CONTROL_DIR, "reviews", "%s.json" % cycle_name)
     if not os.path.isfile(review_file):
@@ -984,6 +1082,10 @@ def main():
     for name in ("materialize", "review", "promote", "rollback"):
         command = commands.add_parser(name)
         command.add_argument("--cycle", required=True)
+    command = commands.add_parser("terminate")
+    command.add_argument("--cycle", required=True)
+    command.add_argument("--status", required=True, choices=("abandoned", "failed"))
+    command.add_argument("--reason", required=True)
     args = parser.parse_args()
     if args.selfcheck:
         if args.command:
@@ -996,6 +1098,8 @@ def main():
     if not args.environment:
         parser.error("--environment is required for commands")
     configure_environment(args.environment)
+    if args.command == "terminate":
+        return terminate(args.cycle, args.status, args.reason)
     return globals()[args.command](args.cycle)
 
 

@@ -3,7 +3,7 @@
 Agent rule の変更だけを control / treatment 間で変え、行動差を計測する最小の装置です。
 評価した treatment bytes と同じ bytes だけを stable baseline へ反映できます。
 
-公開操作は `materialize`、`review`、`promote`、`rollback` の4つです。CLI 固有の設定、
+公開操作は `materialize`、`review`、`promote`、`terminate`、`rollback` の5つです。CLI 固有の設定、
 認証、起動、rule 配置、実行証拠の収集は versioned subject adapter が所有し、core は
 adapter の JSON protocol と digest だけを扱います。
 

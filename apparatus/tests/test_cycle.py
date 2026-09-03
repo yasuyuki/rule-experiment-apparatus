@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import subprocess
@@ -60,6 +61,57 @@ def assert_schema(payload, name):
         pass
     else:
         raise AssertionError("%s accepted an unknown property" % name)
+
+
+def assert_rejected(action, expected):
+    try:
+        action()
+    except SystemExit as error:
+        assert expected in str(error), str(error)
+    else:
+        raise AssertionError("operation unexpectedly succeeded")
+
+
+def held_write_worker(environment, operation, cycle_name, status, reason, ready, release, result):
+    cycle.configure_environment(environment)
+    original = cycle.atomic_write_json
+
+    def delayed_write(path, payload):
+        ready.set()
+        if not release.wait(10):
+            raise AssertionError("test did not release held operation")
+        original(path, payload)
+
+    cycle.atomic_write_json = delayed_write
+    try:
+        if operation == "terminate":
+            cycle.terminate(cycle_name, status, reason)
+        else:
+            cycle.review(cycle_name)
+    except BaseException as error:
+        result.put(str(error))
+    else:
+        result.put(None)
+
+
+def terminate_worker(environment, cycle_name, status, reason, result):
+    cycle.configure_environment(environment)
+    try:
+        cycle.terminate(cycle_name, status, reason)
+    except SystemExit as error:
+        result.put(str(error))
+    else:
+        result.put(None)
+
+
+def worker_result(process, result):
+    process.join(10)
+    if process.is_alive():
+        process.terminate()
+        process.join()
+        raise AssertionError("concurrent worker did not finish")
+    assert process.exitcode == 0, process.exitcode
+    return result.get(timeout=1)
 
 
 RENDERER = '''import os, sys
@@ -225,6 +277,12 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         assert_schema(environment, "environment.schema.json")
         assert_schema(descriptor, "subject.schema.json")
         assert_schema(declaration("fixture"), "cycle.schema.json")
+        termination = {
+            "schemaVersion": 1, "cycle": "halted",
+            "recordedAt": "2026-09-03T00:00:00+00:00", "status": "abandoned",
+            "reason": "fixture operator stopped the run", "declarationSha256": "a" * 64,
+        }
+        assert_schema(termination, "termination.schema.json")
 
         bad_descriptor = json.loads(json.dumps(descriptor))
         bad_descriptor["adapter"]["sha256"] = "0" * 64
@@ -242,6 +300,90 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         fingerprint = cycle.validate_comparison(declaration("fixture"))
         assert fingerprint["baseCommit"] == base_commit
         assert len(fingerprint["adapters"]) == 1
+
+        write(cycles / "halted.json", json.dumps(declaration("halted")))
+        cycle.materialize("halted")
+        state = Path(cycle.state_path("halted"))
+        assert state.is_file()
+        cycle.terminate("halted", "abandoned", "fixture operator stopped the run")
+        termination_path = control / "terminations" / "halted.json"
+        terminated = json.loads(termination_path.read_text(encoding="utf-8"))
+        assert_schema(terminated, "termination.schema.json")
+        original_termination = termination_path.read_bytes()
+        cycle.terminate("halted", "abandoned", "fixture operator stopped the run")
+        assert termination_path.read_bytes() == original_termination
+        assert state.is_file()
+        assert_rejected(
+            lambda: cycle.terminate("halted", "failed", "fixture operator stopped the run"),
+            "differs from requested payload",
+        )
+        assert_rejected(lambda: cycle.terminate("halted", "abandoned", "  "), "must not be empty")
+        assert_rejected(lambda: cycle.terminate("unknown", "failed", "no declaration"), "not found")
+        for operation in (cycle.materialize, cycle.review, cycle.promote):
+            assert_rejected(lambda operation=operation: operation("halted"), "cycle is terminated")
+
+        context = multiprocessing.get_context("fork")
+        write(cycles / "concurrent-terminate.json", json.dumps(declaration("concurrent-terminate")))
+        ready, release, held_result = context.Event(), context.Event(), context.Queue()
+        holder = context.Process(
+            target=held_write_worker,
+            args=(
+                str(environment_path), "terminate", "concurrent-terminate", "abandoned",
+                "operator stopped first", ready, release, held_result,
+            ),
+        )
+        holder.start()
+        assert ready.wait(10), "terminate did not reach its atomic write"
+        contender_result = context.Queue()
+        contender = context.Process(
+            target=terminate_worker,
+            args=(
+                str(environment_path), "concurrent-terminate", "failed", "operator stopped second",
+                contender_result,
+            ),
+        )
+        contender.start()
+        assert "operation already in progress" in worker_result(contender, contender_result)
+        release.set()
+        assert worker_result(holder, held_result) is None
+        concurrent_record = json.loads(
+            (control / "terminations" / "concurrent-terminate.json").read_text(encoding="utf-8")
+        )
+        assert concurrent_record["status"] == "abandoned"
+        assert concurrent_record["reason"] == "operator stopped first"
+
+        write(cycles / "concurrent-review.json", json.dumps(declaration("concurrent-review")))
+        cycle.materialize("concurrent-review")
+        for arm in ("control", "treatment"):
+            workspace = runs / "concurrent-review" / arm
+            write(workspace / "result.txt", arm + "\n")
+            git_commit(workspace, "result")
+        ready, release, held_result = context.Event(), context.Event(), context.Queue()
+        holder = context.Process(
+            target=held_write_worker,
+            args=(
+                str(environment_path), "review", "concurrent-review", None, None,
+                ready, release, held_result,
+            ),
+        )
+        holder.start()
+        assert ready.wait(10), "review did not reach its atomic write"
+        contender_result = context.Queue()
+        contender = context.Process(
+            target=terminate_worker,
+            args=(
+                str(environment_path), "concurrent-review", "failed", "late termination",
+                contender_result,
+            ),
+        )
+        contender.start()
+        assert "operation already in progress" in worker_result(contender, contender_result)
+        release.set()
+        assert worker_result(holder, held_result) is None
+        assert_rejected(
+            lambda: cycle.terminate("concurrent-review", "failed", "late termination"),
+            "review already exists",
+        )
 
         cycle.materialize("fixture")
         assert (runs / "fixture" / "control" / ".rules" / "demo.txt").read_text() == "old\n"
@@ -283,6 +425,10 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
             subject["subjectVersion"] for arm in review["arms"] for subject in arm["subjects"]
         }
         assert versions == {"fake-1"}
+        assert_rejected(
+            lambda: cycle.terminate("fixture", "failed", "review now exists"),
+            "review already exists",
+        )
 
         cycle.promote("fixture")
         promotion = json.loads((control / "promotions" / "fixture.json").read_text(encoding="utf-8"))

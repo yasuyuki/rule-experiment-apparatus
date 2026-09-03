@@ -63,6 +63,15 @@ review verdict は `promote` です。
 digest、両 arm の variant identity、adapter identity / response digest / subject version、criteria、
 verdict、採用対象 treatment digest を1件に固定します。
 
+## Termination
+
+`terminate --cycle <id> --status abandoned|failed --reason <text>` は未 review cycle に
+`terminations/<id>.json` を1度だけ書きます。record は schema version、cycle、recordedAt、status、
+reason、declaration SHA-256 を固定し、同じ payload の再実行は成功しても record を変更しません。
+異なる payload と reviewed cycle は拒否されます。termination record がある cycle は materialize、
+review、promote を実行できません。terminate は arm、release、runtime `.adapter-state` を削除しません。
+同じ cycle の materialize、review、terminate は OS lock で排他され、競合した呼び出しは待機せず拒否されます。
+
 ## Baseline transition
 
 `promote` は review digest、declaration digest、variant Git tree、現在の treatment managed digest、
