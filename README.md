@@ -15,6 +15,7 @@ adapter の JSON protocol と digest だけを扱います。
 - [Protocol and records](docs/RULE-EXPERIMENT.md)
 - [Setup guide](docs/SETUP-GUIDE.md)
 - [Operator guide](docs/USER-GUIDE.md)
+- [Codex subject adapter](docs/CODEX.md)
 
 ### Historical
 
@@ -34,6 +35,7 @@ python3 apparatus/cycle.py --selfcheck
 ```console
 python3 apparatus/tests/test_cycle.py
 python3 apparatus/tests/test_claude_code_adapter.py
+python3 apparatus/tests/test_codex_adapter.py
 ```
 
 `apparatus/tests/test_wsl_materialize.py` は逆に Windows controller でだけ走ります。Windows
