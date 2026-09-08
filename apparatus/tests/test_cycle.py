@@ -252,7 +252,17 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
     def declaration(name):
         return {
             "schemaVersion": 1, "cycle": name, "experiment": "demo",
-            "note": "fixture measurement", "subjects": ["fake"],
+            "note": (
+                "設定読み込みの失敗を減らす task と、control / treatment の instructions を比較する。"
+                "\n\n"
+                "共通 workload は `mode=<x>` を含む入力を読み、修正方針を答えること。"
+                "\n\n"
+                "control は現行 instructions、treatment は「原因を一行で説明する」指示を追加する。"
+                "\n\n"
+                "期待する挙動は原因と修正方針が分かれて読めること。観察は review に記録する。"
+                "\n\n"
+                "前回から treatment の追加文だけを変更し、control と `α/β`、引用符 \"quoted\" を再確認する。"
+            ), "subjects": ["fake"],
             "workload": {
                 "path": "experiments/demo/workload.md", "sha256": sha(experiment / "workload.md"),
             },
@@ -473,7 +483,7 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         assert_schema(review, "review.schema.json")
         assert review["verdict"] == "promote"
         assert review["experiment"] == "demo"
-        assert review["note"] == "fixture measurement"
+        assert review["note"] == declaration("fixture")["note"]
         assert review["treatmentDigest"] == digests["v2"]
         for arm in review["arms"]:
             assert arm["variantBytes"] == variant_bytes[arm["variant"]]
