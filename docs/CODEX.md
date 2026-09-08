@@ -47,3 +47,41 @@ Run the synthetic adapter checks from this repository on POSIX. Set
 `python3 apparatus/tests/test_codex_adapter.py`. Without both variables the test
 explicitly skips real collector integration; that run alone does not prove the
 telemetry contract. The collector repository's own tests remain required.
+
+## Verified connectivity (2026-09-08)
+
+Linux, Python 3.14.4, Codex CLI 0.153.4 and agent-telemetry 0.1.0 were used for
+two sequential fresh sessions. Both used the same config identity and adapter
+identity; treatment differed only by an inert rule comment. Each ran the same
+harmless `printf` task, produced and committed the expected result, emitted its
+rule marker, and completed once. The adapter's exact native workspace/session
+selection agreed with the CLI thread IDs.
+
+| Observation | Control | Treatment |
+| --- | ---: | ---: |
+| Received records | 13 | 15 |
+| Tool result events (all successful, with duration) | 3 | 4 |
+| Token events | 3 | 3 |
+| Missing upstream total-token values | 13 | 15 |
+
+The commit shell commands were grouped differently, explaining the different
+tool-event counts; counts are not operation counts or a rule-effect finding.
+Tokens were retained per event, without a usage sum. Installed collector source
+hashes agreed between arms. Both task criteria were met, so the existing core
+recorded `reject` with only `no attributable effect`; no promotion was attempted.
+The initial identical-byte declaration was terminated before execution because
+the core requires different variant digests.
+
+After the receiver stopped, a separate collector process reread both sessions
+and matched the saved review records exactly. The review remained unchanged and
+the core removed its temporary adapter state. Native message bodies were not
+copied into collection evidence. Profiles, raw native logs, SQLite data, and
+private session IDs are not distributed with this repository.
+
+The README POSIX checks, the configured Codex adapter tests, and the collector's
+22 existing tests passed. Resume, subagents, Windows, long-running collection,
+real receiver failure, and nonzero reasoning/cache-write tokens are not live
+validated. Missing/corrupt DB, missing/zero values, mixed sessions and platforms,
+unknown events, malformed native data, user-only markers, resumed turns, and
+snapshot rereads are covered synthetically. This proves connectivity for the
+observed configuration, not rule effectiveness or billing reconstruction.
