@@ -17,6 +17,9 @@ SPEC = importlib.util.spec_from_file_location("claude_code", ADAPTER)
 claude_code = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(claude_code)
 
+descriptor = json.loads((ROOT / "apparatus" / "subjects" / "claude-code.json").read_text(encoding="utf-8"))
+assert descriptor["adapter"]["sha256"] == hashlib.sha256(ADAPTER.read_bytes()).hexdigest()
+
 
 def run(*args, cwd=None, stdin=None, check=True):
     return subprocess.run(args, cwd=cwd, input=stdin, check=check, capture_output=True,
@@ -154,35 +157,50 @@ fi
         "type": "assistant",
         "message": {"content": [
             {"type": "text", "text": marker},
-            {"type": "tool_use", "name": "Write", "input": {
+            {"type": "tool_use", "id": "write-1", "name": "Write", "input": {
                 "file_path": str(phase), "content": "```console\nsh scripts/check.sh\n%s\n%s\n```\n" % (
                     config_a, native_sources[".credentials.json"],
                 )
             }},
-            {"type": "tool_use", "name": "Skill", "input": {"skill": "demo-skill"}},
-            {"type": "tool_use", "name": "Skill", "input": {"skill": "demo-skill", "args": "full"}},
+            {"type": "tool_use", "id": "shared-skill", "name": "Skill", "input": {"skill": "demo-skill"}},
+            {"type": "tool_use", "id": "shared-skill", "name": "Skill", "input": {"skill": "demo-skill", "args": "full"}},
             {"type": "tool_use", "name": "Skill", "input": {"skill": "/etc/passwd"}},
-            {"type": "tool_use", "name": "Skill", "input": {"skill": 7}},
+            {"type": "tool_use", "id": "unobserved-skill", "name": "Skill", "input": {"skill": 7}},
+            {"type": "tool_use", "id": "error-1", "name": "Bash", "input": {}},
+            {"type": "tool_use", "id": "missing-result", "name": "Bash", "input": {}},
         ], "usage": {
             "input_tokens": 3,
             "output_tokens": 5,
             "server_tool_use": {"web_search_requests": 2},
             "ignored": "not-a-number",
             "boolean": True,
-        }},
+        }, "model": "claude-fixture-a"},
     }) + "\n" + json.dumps({
         "timestamp": "2026-01-02T03:05:06.000Z",
         "type": "assistant",
-        "message": {"content": "second assistant", "usage": {
-            "input_tokens": 7,
-            "output_tokens": "not-a-number",
+        "message": {"content": "second assistant", "model": "claude-fixture-b", "usage": {
+            "input_tokens": 0, "output_tokens": "not-a-number",
             "server_tool_use": {"web_search_requests": 1, "ignored": []},
         }},
     }) + "\n" + json.dumps({
         "timestamp": "2026-01-02T03:06:07.000Z",
+        "type": "assistant",
+        "message": {"content": "third assistant without usage", "model": "/private/model name\n"},
+    }) + "\n" + json.dumps({
+        "timestamp": "2026-01-02T03:07:08.000Z",
+        "type": "assistant",
+        "message": {"content": "fourth assistant without model", "usage": {}},
+    }) + "\n" + json.dumps({
         "type": "user",
-        "message": {"content": "ignored"},
-    }) + "\n")
+        "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "write-1", "content": "not retained"},
+            {"type": "tool_result", "tool_use_id": "shared-skill", "is_error": True, "content": "not retained"},
+            {"type": "tool_result", "tool_use_id": "orphan", "content": "not retained"},
+            {"type": "tool_result", "tool_use_id": None, "toolUseId": "unobserved-skill", "content": "not retained"},
+            {"type": "tool_result", "tool_use_id": "", "toolUseId": "error-1", "is_error": True, "content": "not retained"},
+            {"type": "tool_result", "content": "not retained"},
+        ]},
+    }) + "\nnot json\n[]\n")
     commit(workspace_b, "variant injection")
     write(workspace_b / "result.txt", "done\n")
     commit(workspace_b, "workload")
@@ -207,15 +225,32 @@ fi
     assert evidence["sessions"] == [{
         "path": claude_code.session_path(str(config_a), str(transcript)),
         "firstTimestamp": "2026-01-02T03:04:05.000Z",
-        "lastTimestamp": "2026-01-02T03:06:07.000Z",
+        "lastTimestamp": "2026-01-02T03:07:08.000Z",
     }]
-    assert evidence["assistantCount"] == 2
-    assert evidence["toolUseCount"] == 5
+    assert evidence["assistantCount"] == 4
+    assert evidence["toolUseCount"] == 7
     assert evidence["usage"] == {
-        "input_tokens": 10,
+        "input_tokens": 3,
         "output_tokens": 5,
         "server_tool_use": {"web_search_requests": 3},
     }
+    assert evidence["transcriptCoverage"] == {
+        "files": 1, "linesRead": 7, "jsonParseFailures": 1,
+        "objectRecords": 5, "nonObjectRecords": 1,
+        "timestampsAvailable": 4, "timestampsMissing": 1,
+        "assistantMessages": 4, "usageAvailable": 3, "usageMissing": 1,
+    }
+    assert evidence["transcriptModels"] == {
+        "counts": {"claude-fixture-a": 1, "claude-fixture-b": 1}, "missing": 2,
+    }
+    assert evidence["toolOutcomes"] == {
+        "calls": 7, "callsWithId": 6, "callsWithoutId": 1,
+        "duplicateCallIds": 1, "results": 6, "resultsWithId": 5,
+        "resultsWithoutId": 1, "unmatchedResults": 1, "ambiguousResults": 1,
+        "successful": 2, "explicitErrors": 1, "resultUnobserved": 1,
+    }
+    assert "not retained" not in json.dumps(evidence)
+    assert "/private/model name" not in json.dumps(evidence)
     assert evidence["shortstat"] == {"files": 3, "insertions": 5, "deletions": 0}
     assert evidence["commitsAfterBase"] == 2
     assert evidence["clean"] is True
@@ -237,6 +272,51 @@ fi
     assert str(temp) not in json.dumps(collected["evidence"])
     assert str(config_a) not in json.dumps(collected["evidence"])
     assert not any(source in json.dumps(collected["evidence"]) for source in native_sources.values())
+
+    empty_workspace = temp / "empty-workspace"
+    empty_workspace.mkdir()
+    _, empty_assistants, _, _, _, _, empty_usage, empty_coverage, empty_models, empty_tools = (
+        claude_code.transcript_evidence(str(temp / "missing-config"), str(empty_workspace), marker)
+    )
+    assert empty_assistants == 0
+    assert empty_usage == {}
+    assert empty_coverage == {
+        "files": 0, "linesRead": 0, "jsonParseFailures": 0,
+        "objectRecords": 0, "nonObjectRecords": 0,
+        "timestampsAvailable": 0, "timestampsMissing": 0,
+        "assistantMessages": 0, "usageAvailable": 0, "usageMissing": 0,
+    }
+    assert empty_models == {"counts": {}, "missing": 0}
+    assert empty_tools["calls"] == 0
+
+    empty_transcript = Path(claude_code.project_directory(
+        str(temp / "empty-config"), str(empty_workspace)
+    )) / "empty.jsonl"
+    write(empty_transcript, "")
+    (_, empty_file_assistants, _, _, _, _, empty_file_usage, empty_file_coverage,
+     empty_file_models, empty_file_tools) = claude_code.transcript_evidence(
+        str(temp / "empty-config"), str(empty_workspace), marker
+    )
+    assert empty_file_assistants == 0 and empty_file_usage == {}
+    assert empty_file_coverage == dict(empty_coverage, files=1)
+    assert empty_file_models == {"counts": {}, "missing": 0}
+    assert empty_file_tools["results"] == 0
+
+    zero_workspace = temp / "zero-workspace"
+    zero_workspace.mkdir()
+    zero_transcript = Path(claude_code.project_directory(str(temp / "zero-config"), str(zero_workspace))) / "zero.jsonl"
+    write(zero_transcript, json.dumps({
+        "type": "assistant", "message": {"model": "claude-zero:1", "content": "", "usage": {
+            "input_tokens": 0, "output_tokens": 0,
+        }},
+    }) + "\n")
+    _, zero_assistants, _, _, _, _, zero_usage, zero_coverage, zero_models, _ = (
+        claude_code.transcript_evidence(str(temp / "zero-config"), str(zero_workspace), marker)
+    )
+    assert zero_assistants == 1
+    assert zero_usage == {"input_tokens": 0, "output_tokens": 0}
+    assert zero_coverage["usageAvailable"] == 1 and zero_coverage["usageMissing"] == 0
+    assert zero_models == {"counts": {"claude-zero:1": 1}, "missing": 0}
 
     settings = claude_code.profile(profile)
     for invalid in (

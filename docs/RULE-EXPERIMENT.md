@@ -53,6 +53,33 @@ state を削除します。`prepare` token は record に残るため、adapter 
 後から見つけるための記録であり、取得できたときだけ載る任意 field です。verdict と `promote`
 の条件には入りません（`CONSTITUTION.md` Accepted risk）。
 
+### Claude Code transcript observations
+
+Claude Code adapter の `collect.evidence` は従来の field に加え、任意の観測 field
+`transcriptCoverage`、`transcriptModels`、`toolOutcomes` を返します。これらは verdict、CLI
+version の固定条件、または promotion の条件を変えません。
+
+- `transcriptCoverage` は発見した JSONL file 数、読んだ行数、JSON parse 失敗数、object record 数、
+  非 object JSON 数を記録します。object record ごとに非空文字列 timestamp の有無を数え、assistant
+  message ごとに `message.usage` が object だったかを数えます。usage object が存在して数値の合計が
+  zero の場合は `usageAvailable` に入り、usage が無い・object でない場合は `usageMissing` に入ります。
+  session の first/last timestamp は従来どおり取得できた timestamp のみであり、活動期間や実行時間を
+  表すものではありません。
+- `transcriptModels.counts` は assistant message の `message.model` に逐語で明示された identifier
+  （英数字で始まり、英数字、`.`, `_`, `:`, `-` だけから成る文字列）だけを identifier ごとに数えます。
+  設定値や CLI version から補完しません。非文字列・空・path や空白を含む値・message 欠落は
+  `transcriptModels.missing` に入ります。
+- `toolOutcomes` は assistant content の `tool_use` と、他の record の content にある `tool_result` を
+  ID だけで対応付けます。`tool_use_id` が非空文字列でない場合は `toolUseId` を試します。引数、result
+  本文、credential は保存しません。ID の無い call/result、未知の result ID、同じ call ID の2個目以降を
+  別々に数えます。`duplicateCallIds` は同じ ID の2個目以降の call ごとの数です。outcome は transcript 全体で
+  1回だけ現れた call ID だけを分母にし、対応する result が
+  無ければ `resultUnobserved`、一つでも `is_error: true` なら `explicitErrors`、それ以外の観測済み result
+  なら `successful` です。duplicate call ID は全出現を outcome から除外し、その ID の result は
+  `ambiguousResults` に数えます。unknown ID の result は `unmatchedResults` です。同じ一意 call ID の複数
+  result はすべて対応済みとして扱い、1件でも明示的 error があれば error です。
+  explicit error は transcript に残るその結果だけを示し、再試行や手戻りを意味しません。
+
 ## Evaluation and review
 
 固定 evaluation program は `evaluate` 引数と JSON stdin を受け、arm ごとの同一 criteria を

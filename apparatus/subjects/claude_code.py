@@ -17,6 +17,7 @@ MANAGED_ITEMS = ("rules", "placement.json", "bin/rules.py")
 CREDENTIALS = (".credentials.json", ".claude.json")
 PHASE_RE = re.compile(r"^\.claude/plan-phases/[^/]+/phase-[^/]*\.md$")
 SKILL_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+MODEL_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 EVIDENCE_KIND = "rule-experiment-evidence-v1"
 
 
@@ -294,35 +295,129 @@ def redact_paths(text, paths):
     return text
 
 
+def transcript_model(models, value):
+    """Record only a safe, explicit model identifier from a transcript."""
+    if isinstance(value, str) and MODEL_IDENTIFIER_RE.fullmatch(value):
+        models["counts"][value] = models["counts"].get(value, 0) + 1
+    else:
+        models["missing"] += 1
+
+
+def tool_result_id(block):
+    """Claude transcripts have used both spellings for the referenced tool ID."""
+    for key in ("tool_use_id", "toolUseId"):
+        value = block.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def summarize_tool_outcomes(calls, results):
+    """Pair only IDs that occur once; duplicate IDs cannot be attributed safely."""
+    occurrences, calls_without_id = {}, 0
+    for call_id in calls:
+        if call_id is None:
+            calls_without_id += 1
+        else:
+            occurrences[call_id] = occurrences.get(call_id, 0) + 1
+    identifiers = {call_id: [] for call_id, count in occurrences.items() if count == 1}
+    duplicate_calls = sum(count - 1 for count in occurrences.values() if count > 1)
+    duplicate_ids = {call_id for call_id, count in occurrences.items() if count > 1}
+
+    results_without_id = unmatched_results = ambiguous_results = 0
+    for result_id, is_error in results:
+        if result_id is None:
+            results_without_id += 1
+        elif result_id in identifiers:
+            identifiers[result_id].append(is_error)
+        elif result_id in duplicate_ids:
+            ambiguous_results += 1
+        else:
+            unmatched_results += 1
+
+    successful = explicit_errors = result_unobserved = 0
+    for observations in identifiers.values():
+        if not observations:
+            result_unobserved += 1
+        elif any(observations):
+            explicit_errors += 1
+        else:
+            successful += 1
+    return {
+        "calls": len(calls),
+        "callsWithId": len(calls) - calls_without_id,
+        "callsWithoutId": calls_without_id,
+        "duplicateCallIds": duplicate_calls,
+        "results": len(results),
+        "resultsWithId": len(results) - results_without_id,
+        "resultsWithoutId": results_without_id,
+        "unmatchedResults": unmatched_results,
+        "ambiguousResults": ambiguous_results,
+        "successful": successful,
+        "explicitErrors": explicit_errors,
+        "resultUnobserved": result_unobserved,
+    }
+
+
 def transcript_evidence(config_root, workspace, marker):
     documents, skills = {}, {}
     assistant_count = marker_count = tool_use_count = 0
     usage, session_records = {}, []
+    coverage = {
+        "files": 0, "linesRead": 0, "jsonParseFailures": 0,
+        "objectRecords": 0, "nonObjectRecords": 0,
+        "timestampsAvailable": 0, "timestampsMissing": 0,
+        "assistantMessages": 0, "usageAvailable": 0, "usageMissing": 0,
+    }
+    models = {"counts": {}, "missing": 0}
+    tool_calls, tool_results = [], []
     paths = sorted(glob.glob(
         os.path.join(project_directory(config_root, workspace), "**", "*.jsonl"), recursive=True
     ))
+    coverage["files"] = len(paths)
     for path in paths:
         first_timestamp = last_timestamp = None
         with open(path, encoding="utf-8", errors="replace") as handle:
             for line in handle:
+                coverage["linesRead"] += 1
                 try:
                     item = json.loads(line)
                 except ValueError:
+                    coverage["jsonParseFailures"] += 1
                     continue
                 if not isinstance(item, dict):
+                    coverage["nonObjectRecords"] += 1
                     continue
+                coverage["objectRecords"] += 1
                 timestamp = item.get("timestamp")
                 if isinstance(timestamp, str) and timestamp:
+                    coverage["timestampsAvailable"] += 1
                     if first_timestamp is None:
                         first_timestamp = timestamp
                     last_timestamp = timestamp
+                else:
+                    coverage["timestampsMissing"] += 1
                 if item.get("type") != "assistant":
+                    message = item.get("message")
+                    content = message.get("content") if isinstance(message, dict) else None
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_result":
+                                tool_results.append((tool_result_id(block), block.get("is_error") is True))
                     continue
                 assistant_count += 1
+                coverage["assistantMessages"] += 1
                 message = item.get("message")
                 if not isinstance(message, dict):
+                    coverage["usageMissing"] += 1
+                    transcript_model(models, None)
                     continue
-                add_usage(usage, message.get("usage"))
+                transcript_model(models, message.get("model"))
+                if isinstance(message.get("usage"), dict):
+                    coverage["usageAvailable"] += 1
+                    add_usage(usage, message["usage"])
+                else:
+                    coverage["usageMissing"] += 1
                 content = message.get("content")
                 if isinstance(content, str):
                     marker_count += content.count(marker)
@@ -338,6 +433,8 @@ def transcript_evidence(config_root, workspace, marker):
                     if block.get("type") != "tool_use":
                         continue
                     tool_use_count += 1
+                    call_id = block.get("id")
+                    tool_calls.append(call_id if isinstance(call_id, str) and call_id else None)
                     if not isinstance(block.get("input"), dict):
                         continue
                     args = block["input"]
@@ -365,7 +462,8 @@ def transcript_evidence(config_root, workspace, marker):
             "firstTimestamp": first_timestamp,
             "lastTimestamp": last_timestamp,
         })
-    return session_records, assistant_count, marker_count, tool_use_count, documents, skills, usage
+    return (session_records, assistant_count, marker_count, tool_use_count, documents, skills, usage,
+            coverage, models, summarize_tool_outcomes(tool_calls, tool_results))
 
 
 def git_shortstat(root, base_head):
@@ -389,9 +487,8 @@ def collect(payload, identity):
     workspace, config_root = token["workspace"], token["configRoot"]
     settings = profile(payload["profile"])
     verify_credential_links(config_root, settings["credentialSources"])
-    sessions, assistants, markers, tool_uses, documents, skills, usage = transcript_evidence(
-        config_root, workspace, token["marker"]
-    )
+    (sessions, assistants, markers, tool_uses, documents, skills, usage, coverage, models,
+     tool_outcomes) = transcript_evidence(config_root, workspace, token["marker"])
     private_paths = [config_root] + list(settings["credentialSources"].values())
     documents = {
         path: redact_paths(content, private_paths)
@@ -409,6 +506,9 @@ def collect(payload, identity):
         "phaseDocuments": documents,
         "skillInvocations": skills,
         "usage": usage,
+        "transcriptCoverage": coverage,
+        "transcriptModels": models,
+        "toolOutcomes": tool_outcomes,
         "shortstat": git_shortstat(workspace, token["baseHead"]),
         "clean": clean,
         "commitsAfterBase": commits,
