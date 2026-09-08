@@ -100,11 +100,29 @@ digest、experiment と任意 note、両 arm の variant identity / managed byte
 reason、declaration SHA-256 を固定し、同じ payload の再実行は成功しても record を変更しません。
 異なる payload と reviewed cycle は拒否されます。termination record がある cycle は materialize、
 review、promote を実行できません。terminate は arm、release、runtime `.adapter-state` を削除しません。
-同じ cycle の materialize、review、terminate は OS lock で排他され、競合した呼び出しは待機せず拒否されます。
+同じ cycle の materialize、review、terminate、decide、promote は OS lock で排他され、競合した呼び出しは待機せず拒否されます。
+
+## Decision records
+
+`decide --cycle <id> --input <JSON file>` は review 後の方針を private control の
+`decisions/<cycle>/<sequence>-<id>.json` に追記します。schema は
+[入力](../apparatus/schemas/decision-input.schema.json) と
+[保存record](../apparatus/schemas/decision.schema.json) に分かれます。
+`id` は入力JSONをkey順・UTF-8・空白なしに正規化したSHA-256、sequenceはcycle内の連番です。
+`previousDecision` は最新recordのidで、初回だけnull。同一入力は重複せず、判断変更は新規recordです。
+reviewのSHA-256、他試験への参照、吟味、理由、推奨/確定、方針、決定者、次の行動を固定します。
+本人だけが採用/見送りを確定でき、明示回答とその参照をcontrollerが保存します。認証機構ではありません。
+通常環境の検証は既存の採用判断を引き継いだ `application` で追記し、検証時点だけを表します。
+
+新しいcycleの `originDecision` は元cycleと確定したrevise/continueのidを参照します。
+continueは宣言の比較条件とreviewed adapter identityの一致をmaterialize前に検査します。
+詳細な判断分担と操作は [Operator guide](USER-GUIDE.md) を参照します。
 
 ## Baseline transition
 
-`promote` は review digest、declaration digest、variant Git tree、現在の treatment managed digest、
+`promote` は最初に最新の本人確定採用とreview / treatment digestの一致を要求します。
+推奨・未決定・他方針・対象不一致はpromotion記録を作らず拒否します。準備済み処理の再開も同じです。
+その後、review digest、declaration digest、variant Git tree、現在の treatment managed digest、
 stable branch / clean state を mutation 前に照合します。成功時は detached worktree で renderer と
 stable test を通し、fast-forward します。`rollback` は最新 promotion commit が stable HEAD の
 場合だけその commit を revert し、直前の managed digest を照合します。

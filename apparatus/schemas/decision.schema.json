@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reviewSha256", "previousDecision", "status", "policy", "actor", "reason", "nextAction", "assessment", "references", "schemaVersion", "id", "sequence", "recordedAt", "cycle"],
+  "properties": {
+    "reviewSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "previousDecision": {"anyOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]},
+    "status": {"enum": ["recommended", "confirmed"]},
+    "policy": {"enum": ["discard", "revise", "continue", "hold", "adopt"]},
+    "actor": {"enum": ["agent", "owner"]},
+    "reason": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+    "nextAction": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["comparisonValidity", "effects", "regressions", "uncertainty", "priorTrials", "applicability"],
+      "properties": {
+        "comparisonValidity": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+        "effects": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+        "regressions": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+        "uncertainty": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+        "priorTrials": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+        "applicability": {"type": "string", "pattern": ".*\\S.*", "minLength": 1}
+      }
+    },
+    "references": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["cycle", "reviewSha256"],
+        "properties": {
+          "cycle": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$", "not": {"enum": [".", ".."]}},
+          "reviewSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "ownerResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "reference"],
+      "properties": {
+        "text": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+        "reference": {"type": "string", "pattern": ".*\\S.*", "minLength": 1}
+      }
+    },
+    "adoption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targetDigest", "scope"],
+      "properties": {
+        "targetDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "scope": {"type": "string", "pattern": ".*\\S.*", "minLength": 1}
+      }
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["changes", "question"],
+      "properties": {
+        "changes": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+        "question": {"type": "string", "pattern": ".*\\S.*", "minLength": 1}
+      }
+    },
+    "continuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unresolved", "updateWhen"],
+      "properties": {
+        "unresolved": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+        "updateWhen": {"type": "string", "pattern": ".*\\S.*", "minLength": 1}
+      }
+    },
+    "resumptionCondition": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+    "application": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decisionId", "targetDigest", "scope", "checkedAt", "verificationReference"],
+      "properties": {
+        "decisionId": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "targetDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "scope": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+        "checkedAt": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+        "verificationReference": {"type": "string", "pattern": ".*\\S.*", "minLength": 1}
+      }
+    },
+    "schemaVersion": {"const": 1},
+    "id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "recordedAt": {"type": "string", "pattern": ".*\\S.*", "minLength": 1},
+    "cycle": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$", "not": {"enum": [".", ".."]}}
+  }
+}

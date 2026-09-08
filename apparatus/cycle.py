@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize, review, promote, terminate, and roll back rule experiments."""
+"""Materialize, review, decide, promote, terminate, and roll back rule experiments."""
 
 import argparse
 import contextlib
@@ -571,6 +571,7 @@ def materialize(cycle_name):
     declaration = load_cycle(cycle_name)
     with cycle_lock(cycle_name):
         reject_terminated(cycle_name)
+        validate_origin_decision(declaration)
         validate_comparison(declaration)
         base = resolve_base(declaration)
         materials = resolve_materials(declaration)
@@ -890,7 +891,174 @@ def promotion_reasons(cycle_name, declaration, record):
     return reasons
 
 
+DECISION_METADATA = {"schemaVersion", "id", "sequence", "recordedAt", "cycle"}
+
+
+def decision_input(record):
+    return {key: value for key, value in record.items() if key not in DECISION_METADATA}
+
+
+def decision_id(payload):
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def decision_history(cycle_name):
+    validate_identifier("cycle", cycle_name)
+    directory = os.path.join(CONTROL_DIR, "decisions", cycle_name)
+    history = []
+    if not os.path.isdir(directory):
+        return history
+    for name in sorted(os.listdir(directory)):
+        if not name.endswith(".json"):
+            continue
+        with open(os.path.join(directory, name), encoding="utf-8") as handle:
+            record = json.load(handle)
+        validate_against_schema(record, "decision.schema.json", "decision")
+        expected_previous = history[-1]["id"] if history else None
+        if (record["cycle"] != cycle_name or record["sequence"] != len(history) + 1
+                or record["previousDecision"] != expected_previous
+                or record["id"] != decision_id(decision_input(record))
+                or name != "%08d-%s.json" % (record["sequence"], record["id"])):
+            raise SystemExit("decision history integrity mismatch")
+        history.append(record)
+    return history
+
+
+def decision_review(cycle_name, expected_sha):
+    validate_identifier("cycle", cycle_name)
+    path = os.path.join(CONTROL_DIR, "reviews", "%s.json" % cycle_name)
+    if not os.path.isfile(path) or sha256_file(path) != expected_sha:
+        raise SystemExit("decision review digest mismatch: %s" % cycle_name)
+    with open(path, encoding="utf-8") as handle:
+        record = json.load(handle)
+    if record.get("cycle") != cycle_name:
+        raise SystemExit("decision review cycle mismatch")
+    return record
+
+
+def decide(cycle_name, payload):
+    """Controller records explicit owner answers; this is not an authentication service."""
+    with cycle_lock(cycle_name):
+        load_cycle(cycle_name)
+        validate_against_schema(payload, "decision-input.schema.json", "decision input")
+        history = decision_history(cycle_name)
+        identity = decision_id(payload)
+        for record in history:
+            if record["id"] == identity:
+                print("decision already recorded: %s" % identity)
+                return record
+        previous = history[-1] if history else None
+        if payload["previousDecision"] != (previous["id"] if previous else None):
+            raise SystemExit("previousDecision must reference the latest decision")
+        review_record = decision_review(cycle_name, payload["reviewSha256"])
+        for reference in payload["references"]:
+            if reference["cycle"] == cycle_name:
+                raise SystemExit("other trial reference must name another cycle")
+            decision_review(reference["cycle"], reference["reviewSha256"])
+        if payload["actor"] == "owner" and "ownerResponse" not in payload:
+            raise SystemExit("owner decision requires explicit ownerResponse text and reference")
+        if payload["actor"] == "agent" and "ownerResponse" in payload:
+            raise SystemExit("agent decision cannot claim an ownerResponse")
+        if (payload["status"] == "confirmed" and payload["policy"] in ("adopt", "discard")
+                and payload["actor"] != "owner"):
+            raise SystemExit("only owner may confirm adopt or discard")
+        required = {"adopt": "adoption", "revise": "revision", "continue": "continuation",
+                    "hold": "resumptionCondition"}
+        for policy, field in required.items():
+            if (payload["policy"] == policy) != (field in payload):
+                raise SystemExit("%s requires only its corresponding %s field" % (policy, field))
+        if "adoption" in payload and payload["adoption"]["targetDigest"] != review_record.get("treatmentDigest"):
+            raise SystemExit("adoption target digest differs from review")
+        if "application" in payload:
+            application = payload["application"]
+            anchor = next((item for item in history if item["id"] == application["decisionId"]), None)
+            if (not anchor or anchor["policy"] != "adopt" or anchor["status"] != "confirmed"
+                    or anchor["actor"] != "owner" or payload["status"] != "confirmed"
+                    or payload["policy"] != "adopt" or not previous):
+                raise SystemExit("application requires a confirmed owner adoption")
+            # Carry forward the existing choice, never manufacture a new owner answer.
+            omit = {"previousDecision", "application"}
+            if any({k: v for k, v in decision_input(item).items() if k not in omit}
+                   != {k: v for k, v in payload.items() if k not in omit}
+                   for item in (anchor, previous)):
+                raise SystemExit("application must preserve the latest adoption decision")
+            if (application["targetDigest"] != anchor["adoption"]["targetDigest"]
+                    or application["scope"] != anchor["adoption"]["scope"]):
+                raise SystemExit("application target or scope differs from adoption")
+            try:
+                checked = datetime.datetime.fromisoformat(application["checkedAt"])
+                if checked.tzinfo is None:
+                    raise ValueError()
+            except ValueError:
+                raise SystemExit("application checkedAt requires an ISO timestamp with timezone")
+            promotion_file = promotion_path(cycle_name)
+            if not os.path.isfile(promotion_file):
+                raise SystemExit("application requires completed promotion")
+            with open(promotion_file, encoding="utf-8") as handle:
+                promotion = json.load(handle)
+            if (promotion.get("status") != "promoted"
+                    or promotion.get("reviewSha256") != payload["reviewSha256"]
+                    or promotion.get("treatmentDigest") != application["targetDigest"]
+                    or os.path.exists(rollback_path(cycle_name))):
+                raise SystemExit("application requires matching, non-rolled-back promotion")
+        record = dict(payload, schemaVersion=1, id=identity, cycle=cycle_name,
+                      sequence=len(history) + 1,
+                      recordedAt=datetime.datetime.now().astimezone().isoformat())
+        validate_against_schema(record, "decision.schema.json", "decision")
+        path = os.path.join(CONTROL_DIR, "decisions", cycle_name,
+                            "%08d-%s.json" % (record["sequence"], identity))
+        atomic_write_json(path, record)
+        print("decision recorded: %s" % identity)
+        return record
+
+
+def require_adoption(cycle_name, review_sha, target_digest):
+    history = decision_history(cycle_name)
+    latest = history[-1] if history else None
+    if (not latest or latest["status"] != "confirmed" or latest["policy"] != "adopt"
+            or latest["actor"] != "owner" or "ownerResponse" not in latest):
+        raise SystemExit("promotion requires latest confirmed owner adoption decision")
+    if (latest["reviewSha256"] != review_sha
+            or latest.get("adoption", {}).get("targetDigest") != target_digest):
+        raise SystemExit("promotion decision review or target digest mismatch")
+
+
+def validate_origin_decision(declaration):
+    origin = declaration.get("originDecision")
+    if not origin:
+        return
+    if origin["cycle"] == declaration["cycle"]:
+        raise SystemExit("follow-up requires a new cycle")
+    history = decision_history(origin["cycle"])
+    record = next((item for item in history if item["id"] == origin["decisionId"]), None)
+    if not record or record["status"] != "confirmed" or record["policy"] not in ("revise", "continue"):
+        raise SystemExit("originDecision requires confirmed revise or continue")
+    decision_review(origin["cycle"], record["reviewSha256"])
+    if record["policy"] == "continue":
+        original = load_cycle(origin["cycle"])
+        # Ignore only identity and explanatory prose. All declared comparison conditions remain fixed.
+        omitted = {"cycle", "note", "originDecision"}
+        if ({k: v for k, v in original.items() if k not in omitted}
+                != {k: v for k, v in declaration.items() if k not in omitted}):
+            raise SystemExit("continuation comparison conditions changed; use revise")
+        with open(os.path.join(CONTROL_DIR, "reviews", origin["cycle"] + ".json"), encoding="utf-8") as handle:
+            reviewed = json.load(handle)
+        if reviewed["declarationSha256"] != sha256_file(cycle_path(origin["cycle"])):
+            raise SystemExit("origin declaration changed after review")
+        expected = {item["id"]: item["identity"] for item in adapter_identities(declaration)}
+        for arm in reviewed["arms"]:
+            identities = {subject["id"]: subject["adapterIdentity"] for subject in arm["subjects"]}
+            if identities != expected or len(arm["subjects"]) != len(expected):
+                raise SystemExit("continuation adapter conditions changed; use revise")
+
+
 def promote(cycle_name):
+    with cycle_lock(cycle_name):
+        return _promote(cycle_name)
+
+
+def _promote(cycle_name):
     declaration = load_cycle(cycle_name)
     reject_terminated(cycle_name)
     treatment = next(arm for arm in declaration["arms"] if arm["role"] == "treatment")
@@ -902,6 +1070,9 @@ def promote(cycle_name):
     review_sha = sha256_file(review_file)
     source = variant_dir(declaration, treatment)
     target_digest = managed_digest(source)[0]
+    require_adoption(cycle_name, review_sha, target_digest)
+    if target_digest != review_record.get("treatmentDigest"):
+        raise SystemExit("promotion decision target differs from reviewed bytes")
     stable = stable_rules_root()
     branch = load_environment()["stableRules"]["branch"]
     old_head = git_host(stable, "rev-parse", "HEAD").stdout.strip()
@@ -921,6 +1092,14 @@ def promote(cycle_name):
         if record["status"] == "not-promoted":
             print("not promoted: %s" % "; ".join(record["reasons"]))
             return
+        resume_reasons = promotion_reasons(cycle_name, declaration, review_record)
+        resume_reasons.extend(verify_canonical(declaration, treatment))
+        if git_host(stable, "status", "--porcelain").stdout.strip():
+            resume_reasons.append("stable worktree is dirty")
+        if git_host(stable, "branch", "--show-current").stdout.strip() != branch:
+            resume_reasons.append("stable branch is not %s" % branch)
+        if resume_reasons:
+            raise SystemExit("prepared promotion no longer eligible: " + "; ".join(resume_reasons))
         if old_head == record["oldStableCommit"]:
             git_host(stable, "merge", "--ff-only", record["newStableCommit"])
         elif old_head != record["newStableCommit"]:
@@ -1115,6 +1294,9 @@ def main():
     for name in ("materialize", "review", "promote", "rollback"):
         command = commands.add_parser(name)
         command.add_argument("--cycle", required=True)
+    command = commands.add_parser("decide")
+    command.add_argument("--cycle", required=True)
+    command.add_argument("--input", required=True, help="path to decision JSON input")
     command = commands.add_parser("terminate")
     command.add_argument("--cycle", required=True)
     command.add_argument("--status", required=True, choices=("abandoned", "failed"))
@@ -1131,6 +1313,10 @@ def main():
     if not args.environment:
         parser.error("--environment is required for commands")
     configure_environment(args.environment)
+    if args.command == "decide":
+        with open(args.input, encoding="utf-8") as handle:
+            decide(args.cycle, json.load(handle))
+        return 0
     if args.command == "terminate":
         return terminate(args.cycle, args.status, args.reason)
     return globals()[args.command](args.cycle)
