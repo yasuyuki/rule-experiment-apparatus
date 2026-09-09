@@ -7,6 +7,14 @@ Agent rule の変更だけを control / treatment 間で変え、行動差を計
 認証、起動、rule 配置、実行証拠の収集は versioned subject adapter が所有し、core は
 adapter の JSON protocol と digest だけを扱います。
 
+Claude adapter の profile は任意の `inventory` binding を受け付けます。
+`agentRulesRoot`、`declaration`、`rules`（path 配列）、`site` を明示し、
+宣言の `INVENTORY` が同じ controller 索引を参照します。prepare は通常 user のまま
+公開 lifecycle の construction 検査を呼び、欠落時は arm 準備前に拒否します。
+確認済みの home 配置から管理 skill と読込 binding だけを両 arm の config root へ
+共通配置し、configIdentity に含めます。variant、baseline、既存 evidence は変更しません。
+設定を持たない独立した利用者の profile は従来どおりです。
+
 ## Documents
 
 - [Constitution](CONSTITUTION.md)

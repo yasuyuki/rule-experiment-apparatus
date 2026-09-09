@@ -11,6 +11,9 @@ import shlex
 import shutil
 import subprocess
 import sys
+import importlib.util
+from pathlib import Path
+from types import SimpleNamespace
 
 
 MANAGED_ITEMS = ("rules", "placement.json", "bin/rules.py")
@@ -51,16 +54,17 @@ def managed_digest(root):
     return digest.hexdigest()
 
 
-def config_digest(root):
+def config_digest(root, excluded=()):
     digest = hashlib.sha256()
     for current, dirs, names in os.walk(root):
         if current == root:
             dirs[:] = sorted(name for name in dirs if name not in ("projects", "sessions"))
         else:
             dirs.sort()
+        dirs[:] = [name for name in dirs if os.path.relpath(os.path.join(current, name), root).replace(os.sep, "/") not in excluded]
         for name in sorted(names):
             relative = os.path.relpath(os.path.join(current, name), root).replace(os.sep, "/")
-            if relative in CREDENTIALS:
+            if relative in CREDENTIALS or relative in excluded:
                 continue
             path = os.path.join(current, name)
             digest.update(relative.encode("utf-8") + b"\0")
@@ -80,7 +84,7 @@ def profile(raw):
     except (TypeError, ValueError) as error:
         raise SystemExit("invalid Claude adapter profile: %s" % error)
     required = {"binary", "configTemplate", "credentialSources", "launchPrefix"}
-    if not isinstance(value, dict) or set(value) != required:
+    if not isinstance(value, dict) or set(value) - {"inventory"} != required:
         raise SystemExit("Claude adapter profile must contain only %s" % ", ".join(sorted(required)))
     if not all(
         isinstance(value[key], str) and value[key]
@@ -103,6 +107,46 @@ def profile(raw):
             raise SystemExit("Claude adapter credential source %s must be absolute or home-relative" % name)
         sources[name] = os.path.realpath(sources[name])
     return value
+
+
+def inventory_inputs(settings):
+    """Validate the host's opt-in binding before any arm or credential writes."""
+    binding = settings.get("inventory")
+    if binding is None:
+        return {}
+    fields = {"agentRulesRoot", "declaration", "rules", "site"}
+    if not isinstance(binding, dict) or set(binding) != fields:
+        raise SystemExit("inventory profile needs agentRulesRoot, declaration, rules, site")
+    if not all(isinstance(binding[key], str) and binding[key] for key in ("agentRulesRoot", "declaration", "site")) or not isinstance(binding["rules"], list) or not all(isinstance(path, str) and path for path in binding["rules"]):
+        raise SystemExit("invalid inventory profile values")
+    root = Path(os.path.expanduser(binding["agentRulesRoot"]))
+    declaration = Path(os.path.expanduser(binding["declaration"]))
+    rule_paths = [os.path.expanduser(path) for path in binding["rules"]]
+    if not root.is_absolute() or not declaration.is_absolute() or not all(os.path.isabs(path) for path in rule_paths):
+        raise SystemExit("inventory paths must be absolute or home-relative")
+    if "<!-- BEGIN INVENTORY TSV -->" not in declaration.read_text(encoding="utf-8"):
+        raise SystemExit("inventory declaration has no lifecycle binding")
+    spec = importlib.util.spec_from_file_location("adapter_inventory_place", root / "bin/place.py")
+    place = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(place)
+    args = SimpleNamespace(declaration=str(declaration), rules=rule_paths, skills=[str(root / "skills")], site=binding["site"])
+    context = place.load_context(args)
+    place.inventory_preflight(args, context, binding["site"], mode="construction", constructing_agent="claude")
+    site = context[2][binding["site"]]
+    config = Path(context[0]["tools"]["claude"]["configHome"]["default"].replace("$HOME", site["home"]))
+    paths = ("rules/agent-rules--environment-inventory-required.md", "skills/maintain-environment-inventory")
+    result = {}
+    for relative in paths:
+        path = config / relative
+        files = sorted(path.rglob("*")) if path.is_dir() else [path]
+        for file in files:
+            if file.is_symlink():
+                raise SystemExit("inventory preparation source must not be a symlink")
+            if file.is_file():
+                result[file.relative_to(config).as_posix()] = file.read_bytes()
+    if paths[0] not in result or paths[1] + "/SKILL.md" not in result:
+        raise SystemExit("inventory preparation has no home skill or binding")
+    return result
 
 
 def run(argv, cwd=None, check=True, env=None):
@@ -168,15 +212,17 @@ def verify_subscription(settings, config_root):
 
 def prepare(payload, identity):
     settings = profile(payload["profile"])
+    common_inventory = inventory_inputs(settings)
     workspace = payload["workspace"]
     config_root = payload["configRoot"]
     variant = payload["variant"]["path"]
     actual_digest = managed_digest(variant)
     if actual_digest != payload["variant"]["digest"]:
         raise SystemExit("variant digest mismatch")
-    if os.path.lexists(config_root):
-        if not os.path.isdir(config_root) or config_digest(config_root) != config_digest(
-            settings["configTemplate"]
+    existing_config = os.path.lexists(config_root)
+    if existing_config:
+        if not os.path.isdir(config_root) or config_digest(config_root, common_inventory) != config_digest(
+            settings["configTemplate"], common_inventory
         ):
             raise SystemExit("config root differs from template: %s" % config_root)
     else:
@@ -189,6 +235,18 @@ def prepare(payload, identity):
             if not os.path.exists(source):
                 raise SystemExit("credential source is missing: %s" % name)
             os.symlink(source, os.path.join(config_root, name))
+    # Only these validated common inputs are added to both arms. They never
+    # enter the variant renderer or the shared environment catalog.
+    for relative, contents in common_inventory.items():
+        target = Path(config_root) / relative
+        if target.is_symlink() or any((Path(config_root) / parent).is_symlink() for parent in Path(relative).parents) or (existing_config and not target.is_file()) or (target.exists() and target.read_bytes() != contents):
+            raise SystemExit("inventory common placement differs: " + relative)
+    for relative, contents in common_inventory.items():
+        if existing_config:
+            continue
+        target = Path(config_root) / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(contents)
     verify_credential_links(config_root, settings["credentialSources"])
     verify_subscription(settings, config_root)
     verify_credential_links(config_root, settings["credentialSources"])
