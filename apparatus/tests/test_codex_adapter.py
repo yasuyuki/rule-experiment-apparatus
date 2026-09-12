@@ -1,3 +1,4 @@
+import argparse
 import hashlib
 import importlib.util
 import json
@@ -6,6 +7,14 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--require-collector", action="store_true",
+                    help="fail instead of skipping configured collector integration")
+args = parser.parse_args()
+if args.require_collector and not all(os.environ.get(key) for key in (
+        "AGENT_TELEMETRY_PYTHON", "AGENT_TELEMETRY_SOURCE")):
+    parser.error("--require-collector needs AGENT_TELEMETRY_PYTHON and AGENT_TELEMETRY_SOURCE")
 
 
 ROOT = Path(__file__).resolve().parents[2]

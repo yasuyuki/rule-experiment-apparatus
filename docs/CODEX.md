@@ -48,6 +48,13 @@ Run the synthetic adapter checks from this repository on POSIX. Set
 explicitly skips real collector integration; that run alone does not prove the
 telemetry contract. The collector repository's own tests remain required.
 
+Use `python3 apparatus/tests/test_codex_adapter.py --require-collector` for the
+required integration path; missing either variable fails before the checks run.
+CI keeps the dependency-free adapter checks in the apparatus job and installs a
+pinned public collector in a separate job, runs its tests, then requires the real
+collector checks (including installed source identity). This does not prove a
+live Codex session or a rule effect.
+
 ## Verified connectivity (2026-09-08)
 
 Linux, Python 3.14.4, Codex CLI 0.153.4 and agent-telemetry 0.1.0 were used for
