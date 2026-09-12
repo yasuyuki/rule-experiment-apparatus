@@ -17,6 +17,9 @@ SPEC = importlib.util.spec_from_file_location("claude_code", ADAPTER)
 claude_code = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(claude_code)
 
+descriptor = json.loads((ROOT / "apparatus" / "subjects" / "claude-code.json").read_text(encoding="utf-8"))
+assert descriptor["adapter"]["sha256"] == hashlib.sha256(ADAPTER.read_bytes()).hexdigest()
+
 
 def run(*args, cwd=None, stdin=None, check=True):
     return subprocess.run(args, cwd=cwd, input=stdin, check=check, capture_output=True,
@@ -100,8 +103,9 @@ fi
         commit(root, "base")
         return root
 
-    def prepare(name, materials=()):
-        root, config = workspace(name), temp / (name + "-config")
+    def prepare(name, materials=(), config=None, check=True):
+        root = workspace(name)
+        config = config or temp / (name + "-config")
         payload = {
             "protocolVersion": 1, "cycle": "fixture", "arm": name,
             "workspace": str(root), "configRoot": str(config),
@@ -110,13 +114,24 @@ fi
             "materials": list(materials),
             "profile": profile,
         }
-        result = json.loads(run(sys.executable, str(ADAPTER), "prepare",
-                                stdin=json.dumps(payload)).stdout)
+        completed = run(sys.executable, str(ADAPTER), "prepare", check=check,
+                        stdin=json.dumps(payload))
+        result = json.loads(completed.stdout) if check else completed
         return root, config, result
 
+    shortstat_workspace = workspace("shortstat-empty")
+    assert claude_code.git_shortstat(str(shortstat_workspace),
+                                     claude_code.git(str(shortstat_workspace), "rev-parse", "HEAD").stdout.strip()) == {
+        "files": 0, "insertions": 0, "deletions": 0,
+    }
+
     workspace_a, config_a, prepared_a = prepare("arm-a")
-    workspace_b, config_b, prepared_b = prepare("arm-b")
+    workspace_b, config_b, prepared_b = prepare("arm-b", config=config_a)
+    assert config_a == config_b
     assert prepared_a["configIdentity"] == prepared_b["configIdentity"]
+    _, _, collision = prepare("arm_a", config=config_a, check=False)
+    assert collision.returncode != 0
+    assert "Claude project directory collision between workspaces" in collision.stderr
     assert prepared_a["variantDigest"] == digest
     assert "launcher" in prepared_a["launch"]
     assert "--add-dir" not in prepared_a["launch"]
@@ -136,19 +151,66 @@ fi
     commit(workspace_a, "workload")
     marker = prepared_a["token"]["marker"]
     phase = workspace_a / ".claude" / "plan-phases" / "fixture" / "phase-01.md"
-    transcript = config_a / "projects" / "fixture" / "session.jsonl"
+    transcript = Path(claude_code.project_directory(str(config_a), str(workspace_a))) / "session.jsonl"
     write(transcript, json.dumps({
+        "timestamp": "2026-01-02T03:04:05.000Z",
         "type": "assistant",
         "message": {"content": [
             {"type": "text", "text": marker},
-            {"type": "tool_use", "name": "Write", "input": {
-                "file_path": str(phase), "content": "```console\nsh scripts/check.sh\n```\n"
+            {"type": "tool_use", "id": "write-1", "name": "Write", "input": {
+                "file_path": str(phase), "content": "```console\nsh scripts/check.sh\n%s\n%s\n```\n" % (
+                    config_a, native_sources[".credentials.json"],
+                )
             }},
-            {"type": "tool_use", "name": "Skill", "input": {"skill": "demo-skill"}},
-            {"type": "tool_use", "name": "Skill", "input": {"skill": "demo-skill", "args": "full"}},
+            {"type": "tool_use", "id": "shared-skill", "name": "Skill", "input": {"skill": "demo-skill"}},
+            {"type": "tool_use", "id": "shared-skill", "name": "Skill", "input": {"skill": "demo-skill", "args": "full"}},
             {"type": "tool_use", "name": "Skill", "input": {"skill": "/etc/passwd"}},
-            {"type": "tool_use", "name": "Skill", "input": {"skill": 7}},
+            {"type": "tool_use", "id": "unobserved-skill", "name": "Skill", "input": {"skill": 7}},
+            {"type": "tool_use", "id": "error-1", "name": "Bash", "input": {}},
+            {"type": "tool_use", "id": "missing-result", "name": "Bash", "input": {}},
+        ], "usage": {
+            "input_tokens": 3,
+            "output_tokens": 5,
+            "server_tool_use": {"web_search_requests": 2},
+            "ignored": "not-a-number",
+            "boolean": True,
+        }, "model": "claude-fixture-a"},
+    }) + "\n" + json.dumps({
+        "timestamp": "2026-01-02T03:05:06.000Z",
+        "type": "assistant",
+        "message": {"content": "second assistant", "model": "claude-fixture-b", "usage": {
+            "input_tokens": 0, "output_tokens": "not-a-number",
+            "server_tool_use": {"web_search_requests": 1, "ignored": []},
+        }},
+    }) + "\n" + json.dumps({
+        "timestamp": "2026-01-02T03:06:07.000Z",
+        "type": "assistant",
+        "message": {"content": "third assistant without usage", "model": "/private/model name\n"},
+    }) + "\n" + json.dumps({
+        "timestamp": "2026-01-02T03:07:08.000Z",
+        "type": "assistant",
+        "message": {"content": "fourth assistant without model", "usage": {}},
+    }) + "\n" + json.dumps({
+        "type": "user",
+        "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "write-1", "content": "not retained"},
+            {"type": "tool_result", "tool_use_id": "shared-skill", "is_error": True, "content": "not retained"},
+            {"type": "tool_result", "tool_use_id": "orphan", "content": "not retained"},
+            {"type": "tool_result", "tool_use_id": None, "toolUseId": "unobserved-skill", "content": "not retained"},
+            {"type": "tool_result", "tool_use_id": "", "toolUseId": "error-1", "is_error": True, "content": "not retained"},
+            {"type": "tool_result", "content": "not retained"},
         ]},
+    }) + "\nnot json\n[]\n")
+    commit(workspace_b, "variant injection")
+    write(workspace_b / "result.txt", "done\n")
+    commit(workspace_b, "workload")
+    transcript_b = Path(claude_code.project_directory(
+        str(config_b), str(workspace_b)
+    )) / "session.jsonl"
+    write(transcript_b, json.dumps({
+        "timestamp": "2026-01-02T04:00:00.000Z",
+        "type": "assistant",
+        "message": {"content": prepared_b["token"]["marker"], "usage": {"input_tokens": 99}},
     }) + "\n")
     collected = json.loads(run(sys.executable, str(ADAPTER), "collect", stdin=json.dumps({
         "protocolVersion": 1, "cycle": "fixture", "arm": "arm-a",
@@ -156,13 +218,105 @@ fi
     })).stdout)
     assert collected["success"] is True
     assert collected["ruleLoaded"] is True
-    evidence = json.loads(collected["evidence"][0])
-    assert evidence["phaseDocuments"][".claude/plan-phases/fixture/phase-01.md"].startswith("```console")
+    evidence = collected["evidence"]
+    phase_evidence = evidence["phaseDocuments"][".claude/plan-phases/fixture/phase-01.md"]
+    assert phase_evidence.startswith("```console")
+    assert "[redacted-path]" in phase_evidence
+    assert evidence["sessions"] == [{
+        "path": claude_code.session_path(str(config_a), str(transcript)),
+        "firstTimestamp": "2026-01-02T03:04:05.000Z",
+        "lastTimestamp": "2026-01-02T03:07:08.000Z",
+    }]
+    assert evidence["assistantCount"] == 4
+    assert evidence["toolUseCount"] == 7
+    assert evidence["usage"] == {
+        "input_tokens": 3,
+        "output_tokens": 5,
+        "server_tool_use": {"web_search_requests": 3},
+    }
+    assert evidence["transcriptCoverage"] == {
+        "files": 1, "linesRead": 7, "jsonParseFailures": 1,
+        "objectRecords": 5, "nonObjectRecords": 1,
+        "timestampsAvailable": 4, "timestampsMissing": 1,
+        "assistantMessages": 4, "usageAvailable": 3, "usageMissing": 1,
+    }
+    assert evidence["transcriptModels"] == {
+        "counts": {"claude-fixture-a": 1, "claude-fixture-b": 1}, "missing": 2,
+    }
+    assert evidence["toolOutcomes"] == {
+        "calls": 7, "callsWithId": 6, "callsWithoutId": 1,
+        "duplicateCallIds": 1, "results": 6, "resultsWithId": 5,
+        "resultsWithoutId": 1, "unmatchedResults": 1, "ambiguousResults": 1,
+        "successful": 2, "explicitErrors": 1, "resultUnobserved": 1,
+    }
+    assert "not retained" not in json.dumps(evidence)
+    assert "/private/model name" not in json.dumps(evidence)
+    assert evidence["shortstat"] == {"files": 3, "insertions": 5, "deletions": 0}
+    assert evidence["commitsAfterBase"] == 2
+    assert evidence["clean"] is True
     # A skill only reaches the subject when the subject invokes it, so the count
     # separates "the skill changed nothing" from "the skill never ran". The name is
     # subject-supplied, so anything but a bare identifier is dropped.
     assert evidence["skillInvocations"] == {"demo-skill": 2}
-    assert not any(str(temp) in item for item in collected["evidence"])
+    collected_b = json.loads(run(sys.executable, str(ADAPTER), "collect", stdin=json.dumps({
+        "protocolVersion": 1, "cycle": "fixture", "arm": "arm-b",
+        "workspace": str(workspace_b), "profile": profile, "token": prepared_b["token"],
+    })).stdout)
+    assert collected_b["evidence"]["sessions"] == [{
+        "path": claude_code.session_path(str(config_b), str(transcript_b)),
+        "firstTimestamp": "2026-01-02T04:00:00.000Z",
+        "lastTimestamp": "2026-01-02T04:00:00.000Z",
+    }]
+    assert collected_b["evidence"]["assistantCount"] == 1
+    assert collected_b["evidence"]["usage"] == {"input_tokens": 99}
+    assert str(temp) not in json.dumps(collected["evidence"])
+    assert str(config_a) not in json.dumps(collected["evidence"])
+    assert not any(source in json.dumps(collected["evidence"]) for source in native_sources.values())
+
+    empty_workspace = temp / "empty-workspace"
+    empty_workspace.mkdir()
+    _, empty_assistants, _, _, _, _, empty_usage, empty_coverage, empty_models, empty_tools = (
+        claude_code.transcript_evidence(str(temp / "missing-config"), str(empty_workspace), marker)
+    )
+    assert empty_assistants == 0
+    assert empty_usage == {}
+    assert empty_coverage == {
+        "files": 0, "linesRead": 0, "jsonParseFailures": 0,
+        "objectRecords": 0, "nonObjectRecords": 0,
+        "timestampsAvailable": 0, "timestampsMissing": 0,
+        "assistantMessages": 0, "usageAvailable": 0, "usageMissing": 0,
+    }
+    assert empty_models == {"counts": {}, "missing": 0}
+    assert empty_tools["calls"] == 0
+
+    empty_transcript = Path(claude_code.project_directory(
+        str(temp / "empty-config"), str(empty_workspace)
+    )) / "empty.jsonl"
+    write(empty_transcript, "")
+    (_, empty_file_assistants, _, _, _, _, empty_file_usage, empty_file_coverage,
+     empty_file_models, empty_file_tools) = claude_code.transcript_evidence(
+        str(temp / "empty-config"), str(empty_workspace), marker
+    )
+    assert empty_file_assistants == 0 and empty_file_usage == {}
+    assert empty_file_coverage == dict(empty_coverage, files=1)
+    assert empty_file_models == {"counts": {}, "missing": 0}
+    assert empty_file_tools["results"] == 0
+
+    zero_workspace = temp / "zero-workspace"
+    zero_workspace.mkdir()
+    zero_transcript = Path(claude_code.project_directory(str(temp / "zero-config"), str(zero_workspace))) / "zero.jsonl"
+    write(zero_transcript, json.dumps({
+        "type": "assistant", "message": {"model": "claude-zero:1", "content": "", "usage": {
+            "input_tokens": 0, "output_tokens": 0,
+        }},
+    }) + "\n")
+    _, zero_assistants, _, _, _, _, zero_usage, zero_coverage, zero_models, _ = (
+        claude_code.transcript_evidence(str(temp / "zero-config"), str(zero_workspace), marker)
+    )
+    assert zero_assistants == 1
+    assert zero_usage == {"input_tokens": 0, "output_tokens": 0}
+    assert zero_coverage["usageAvailable"] == 1 and zero_coverage["usageMissing"] == 0
+    assert zero_models == {"counts": {"claude-zero:1": 1}, "missing": 0}
 
     settings = claude_code.profile(profile)
     for invalid in (

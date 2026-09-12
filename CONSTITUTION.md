@@ -18,13 +18,36 @@ CONSTITUTION.md + docs/IMPROVEMENT-POLICY.md
 ```
 
 `CONSTITUTION.md` と `docs/IMPROVEMENT-POLICY.md` を憲章文書と呼び、同じ位置づけで扱います。
-前者は装置が何であるかを、後者は purpose を失わずにどう削減し改善するかを定めます。他の文書が
-憲章文書と食い違うときは憲章文書を正とします。
+前者は装置の目的・責務境界・必須品質要件を、後者はそれらを失わずにどう削減し改善するかを
+定めます。他の文書が憲章文書と食い違うときは憲章文書を正とします。
 
 Controller は宣言、repository の複製、digest 照合、評価、review、baseline の状態遷移を
 扱います。Subject は注入済み variant の下で逐語の workload だけを実行します。
 Subject adapter は CLI 固有の executable、config、credential、session、指示 bytes の placement と
 sanitized evidence reference を所有します。
+
+## Transparent operation
+
+通常利用の透過性は、Purpose を達成するための必須品質要件です。人間と運用を担う
+controller agent は、内部構造を意識せず、目的と必要な選択を与えるだけで、必要な安全確認を
+維持した短い通常経路を使えるようにします。初回設定、移行、障害調査・復旧を通常利用と
+区別し、そのための手順を毎回の前提にしません。
+
+定型的な状態解決、起動引数の構成、機械的な整合性検査、必要な記録は、それぞれの責務を
+持つ層が処理します。人間や controller agent に、複数履歴の巡回、環境依存の複雑な引数の
+組立て、同一前提の反復的な再解釈・説明、同じ事実の重複転記を常態として要求しません。
+作業文脈は現在の対象と状態を中心に渡し、関連仕様・履歴・証拠は必要時に参照可能にします。
+
+透過性は出力の非表示、履歴の一括投入、別の agent への付替えだけでは満たせません。
+既存の入口・宣言・記録を優先し、不要な処理と反復的な認知負担そのものを減らします。
+権限と明示的な承認、Invariants、状態変化に応じた再検査、意味的な妥当性判断は維持します。
+対象・source・権限が曖昧なときは推測で選ばず、影響する操作で問題と必要な対応を示し、
+安全に確定できない変更は実行しません。
+
+この要件は基盤の設計・実装・受入に適用し、作業ごとの新たな遵守宣言・確認票・証跡の
+重複作成として実装しません。遵守確認のために Subject の workload や評価対象の指示 bytes を
+変更しません。CLI lifecycle などを apparatus core に取り込む理由にもせず、Boundary を
+維持して適切な責務の層で満たします。
 
 ## Invariants
 
@@ -34,7 +57,7 @@ sanitized evidence reference を所有します。
    を宣言と照合する。
 3. adapter は versioned entrypoint であり、descriptor の SHA-256 と実ファイルを一致させる。
 4. adapter の `prepare` / `collect` 応答を schema 検証し、同じ adapter identity を返させる。
-5. adapter の一時応答は単一 review record へ digest として取り込み、その後削除する。
+5. adapter の応答は sanitized JSON として単一 review record へ逐語で取り込み、一時 state はその後削除する。
 6. review は declaration、base、workload、evaluation、adapter 応答、各 arm の criteria、verdict、
    treatment digest を1件にまとめる。
 7. `promote` は review の treatment digest と現在の source bytes が一致するときだけ実行する。
@@ -52,9 +75,12 @@ cycle の verdict や `promote` の条件にはしません。version を取得�
 
 ## Necessity gate
 
-機能、schema、文書、test は、それを削除すると purpose が未達または未証明になる場合だけ
-維持します。製品開発、汎用 release 配布、CLI lifecycle はこの装置の責務ではありません。
+機能、schema、文書、test は、それを削除すると Purpose の達成・証明、Invariants、または
+通常利用の透過性を満たせなくなる場合だけ維持します。削減はコード・文書の量だけでなく、
+人間と agent の通常操作の負担を含めて判断します。同じ仕事を基盤から利用者へ移しただけなら
+簡素化とはみなしません。製品開発、汎用 release 配布、CLI lifecycle はこの装置の責務では
+ありません。
 
 この gate をどの順序で適用するかは `docs/IMPROVEMENT-POLICY.md` が定めます。憲章文書自身は
-gate の対象ではありません。憲章文書の変更は、削減の一手ではなく、purpose または改善順序を
-変える意図的な決定として行います。
+gate の対象ではありません。憲章文書の変更は、削減の一手ではなく、purpose、必須品質要件、
+責務境界または改善順序を変える意図的な決定として行います。

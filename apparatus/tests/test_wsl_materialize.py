@@ -139,12 +139,12 @@ with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
             {
                 "id": "control", "role": "control", "variant": "v1",
                 "variantTree": trees["v1"],
-                "variantDigest": cycle.managed_digest(str(experiment / "variants" / "v1" / "source")),
+                "variantDigest": cycle.managed_digest(str(experiment / "variants" / "v1" / "source"))[0],
             },
             {
                 "id": "treatment", "role": "treatment", "variant": "v2",
                 "variantTree": trees["v2"],
-                "variantDigest": cycle.managed_digest(str(experiment / "variants" / "v2" / "source")),
+                "variantDigest": cycle.managed_digest(str(experiment / "variants" / "v2" / "source"))[0],
             },
         ],
     }

@@ -2,13 +2,17 @@
 
 Version control 下の experiment source に workload、evaluation、control / treatment variant source を
 置きます。Private control repository の `cycles/<cycle>.json` に exact Git tree と SHA-256 を固定します。
+必要なら declaration の非空 `note` に、この測り直しの目的を残します。
 
 ```console
 python3 apparatus/cycle.py --environment <environment.json> materialize --cycle <cycle>
 ```
 
 表示された launch 情報で各 subject を起動し、両 arm へ同じ workload を逐語で渡します。完了後、
-各 arm の workload 変更を commit して review を作ります。
+各 arm の workload 変更を commit して review を作ります。review は declaration の experiment / note、
+各 managed variant の合計 bytes、adapter の sanitized `prepare` / `collect` 応答を逐語で固定し、
+成功後に runtime `.adapter-state` を削除します。adapter が返す token に credential path を含む key を
+置かないでください。
 
 ```console
 python3 apparatus/cycle.py --environment <environment.json> review --cycle <cycle>
