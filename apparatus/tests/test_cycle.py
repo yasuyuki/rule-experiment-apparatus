@@ -288,7 +288,7 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
             lambda: cycle.validate_against_schema(
                 dict(declaration("fixture"), note=""), "cycle.schema.json", "empty note"
             ),
-            "should be non-empty",
+            "note:",
         )
         accepted_values = cycle._validate_evaluation_output({"arms": [
             {"id": "control", "criteria": [{
