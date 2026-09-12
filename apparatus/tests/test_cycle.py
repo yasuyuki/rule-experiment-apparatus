@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import importlib.util
 import json
@@ -139,7 +140,9 @@ if sys.argv[1] == "prepare":
         "protocolVersion": 1, "adapterIdentity": identity, "subjectVersion": "fake-1",
         "configIdentity": "c" * 64, "variantDigest": payload["variant"]["digest"],
         "placements": [{"path": ".rules/demo.txt", "sha256": digest}],
-        "launch": "fake " + payload["workspace"], "token": {"workspace": payload["workspace"]},
+        "launch": "fake " + payload["workspace"], "token": {
+            "workspace": payload["workspace"], "configRoot": payload["configRoot"],
+        },
     }
 elif sys.argv[1] == "collect":
     workspace = payload["token"]["workspace"]
@@ -147,7 +150,7 @@ elif sys.argv[1] == "collect":
         "protocolVersion": 1, "adapterIdentity": identity,
         "success": os.path.isfile(os.path.join(workspace, "result.txt")),
         "ruleLoaded": os.path.isfile(os.path.join(workspace, ".rules", "demo.txt")),
-        "evidence": ["result.txt"],
+        "evidence": {"result": "result.txt"},
     }
 else:
     raise SystemExit(2)
@@ -164,6 +167,7 @@ for arm in payload["arms"]:
         "criterion": 1, "text": "variant changes behavior",
         "result": "met" if arm["role"] == "treatment" else "not-met",
         "evidence": arm["id"] + "/result.txt",
+        "value": 1.0 if arm["role"] == "treatment" else 0.0,
     }]})
 print(json.dumps({"arms": arms}))
 '''
@@ -238,14 +242,17 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         variant: git_value(source, "rev-parse", "HEAD:experiments/demo/variants/%s/source" % variant)
         for variant in ("v1", "v2")
     }
-    digests = {
+    measurements = {
         variant: cycle.managed_digest(str(experiment / "variants" / variant / "source"))
         for variant in ("v1", "v2")
     }
+    digests = {variant: measurement[0] for variant, measurement in measurements.items()}
+    variant_bytes = {variant: measurement[1] for variant, measurement in measurements.items()}
 
     def declaration(name):
         return {
-            "schemaVersion": 1, "cycle": name, "experiment": "demo", "subjects": ["fake"],
+            "schemaVersion": 1, "cycle": name, "experiment": "demo",
+            "note": "fixture measurement", "subjects": ["fake"],
             "workload": {
                 "path": "experiments/demo/workload.md", "sha256": sha(experiment / "workload.md"),
             },
@@ -277,6 +284,49 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         assert_schema(environment, "environment.schema.json")
         assert_schema(descriptor, "subject.schema.json")
         assert_schema(declaration("fixture"), "cycle.schema.json")
+        assert_rejected(
+            lambda: cycle.validate_against_schema(
+                dict(declaration("fixture"), note=""), "cycle.schema.json", "empty note"
+            ),
+            "should be non-empty",
+        )
+        accepted_values = cycle._validate_evaluation_output({"arms": [
+            {"id": "control", "criteria": [{
+                "criterion": 1, "text": "numeric", "result": "not-met",
+                "evidence": "control", "value": 0,
+            }]},
+            {"id": "treatment", "criteria": [{
+                "criterion": 1, "text": "numeric", "result": "met",
+                "evidence": "treatment", "value": 1.5,
+            }]},
+        ]}, declaration("fixture"))
+        assert accepted_values["treatment"][0]["value"] == 1.5
+        assert_rejected(
+            lambda: cycle._validate_evaluation_output({"arms": [
+                {"id": "control", "criteria": [{
+                    "criterion": 1, "text": "boolean", "result": "not-met",
+                    "evidence": "control", "value": True,
+                }]},
+                {"id": "treatment", "criteria": [{
+                    "criterion": 1, "text": "boolean", "result": "met",
+                    "evidence": "treatment", "value": 1,
+                }]},
+            ]}, declaration("fixture")),
+            "invalid evaluation criterion",
+        )
+        assert_rejected(
+            lambda: cycle._validate_evaluation_output({"arms": [
+                {"id": "control", "criteria": [{
+                    "criterion": 1, "text": "non-finite", "result": "not-met",
+                    "evidence": "control", "value": float("nan"),
+                }]},
+                {"id": "treatment", "criteria": [{
+                    "criterion": 1, "text": "non-finite", "result": "met",
+                    "evidence": "treatment", "value": 1,
+                }]},
+            ]}, declaration("fixture")),
+            "invalid evaluation criterion",
+        )
         termination = {
             "schemaVersion": 1, "cycle": "halted",
             "recordedAt": "2026-09-03T00:00:00+00:00", "status": "abandoned",
@@ -389,6 +439,12 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         assert (runs / "fixture" / "control" / ".rules" / "demo.txt").read_text() == "old\n"
         assert (runs / "fixture" / "treatment" / ".rules" / "demo.txt").read_text() == "new\n"
         assert Path(cycle.state_path("fixture")).is_file()
+        state_before_review = json.loads(Path(cycle.state_path("fixture")).read_text(encoding="utf-8"))
+        config_roots = {
+            subject["prepare"]["token"]["configRoot"]
+            for arm in state_before_review["arms"] for subject in arm["subjects"]
+        }
+        assert config_roots == {str(runs / "fixture" / "configs" / "fake")}
         materialized = runs / "fixture" / "materials" / "reference"
         assert (materialized / "reference.md").read_text() == "material\n"
         assert git_value(materialized, "rev-parse", "HEAD") == material_commit
@@ -416,7 +472,20 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         review = json.loads((control / "reviews" / "fixture.json").read_text(encoding="utf-8"))
         assert_schema(review, "review.schema.json")
         assert review["verdict"] == "promote"
+        assert review["experiment"] == "demo"
+        assert review["note"] == "fixture measurement"
         assert review["treatmentDigest"] == digests["v2"]
+        for arm in review["arms"]:
+            assert arm["variantBytes"] == variant_bytes[arm["variant"]]
+            assert arm["criteria"][0]["value"] in (0.0, 1.0)
+            state_arm = next(item for item in state_before_review["arms"] if item["id"] == arm["id"])
+            prepared = state_arm["subjects"][0]["prepare"]
+            subject = arm["subjects"][0]
+            assert subject["prepare"] == prepared
+            assert subject["collect"] == {
+                "protocolVersion": 1, "adapterIdentity": descriptor["adapter"]["sha256"],
+                "success": True, "ruleLoaded": True, "evidence": {"result": "result.txt"},
+            }
         identities = {
             subject["adapterIdentity"] for arm in review["arms"] for subject in arm["subjects"]
         }
@@ -425,6 +494,16 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
             subject["subjectVersion"] for arm in review["arms"] for subject in arm["subjects"]
         }
         assert versions == {"fake-1"}
+        legacy_review = copy.deepcopy(review)
+        legacy_review.pop("experiment")
+        legacy_review.pop("note")
+        for arm in legacy_review["arms"]:
+            arm.pop("variantBytes")
+            for subject in arm["subjects"]:
+                subject.pop("prepare")
+                subject.pop("collect")
+                subject["adapterResponseDigest"] = "a" * 64
+        assert cycle.promotion_reasons("fixture", declaration("fixture"), legacy_review) == []
         assert_rejected(
             lambda: cycle.terminate("fixture", "failed", "review now exists"),
             "review already exists",

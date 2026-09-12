@@ -4,6 +4,7 @@
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -16,6 +17,7 @@ MANAGED_ITEMS = ("rules", "placement.json", "bin/rules.py")
 CREDENTIALS = (".credentials.json", ".claude.json")
 PHASE_RE = re.compile(r"^\.claude/plan-phases/[^/]+/phase-[^/]*\.md$")
 SKILL_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+MODEL_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 EVIDENCE_KIND = "rule-experiment-evidence-v1"
 
 
@@ -174,19 +176,24 @@ def prepare(payload, identity):
     if actual_digest != payload["variant"]["digest"]:
         raise SystemExit("variant digest mismatch")
     if os.path.lexists(config_root):
-        raise SystemExit("config root already exists: %s" % config_root)
-    shutil.copytree(
-        settings["configTemplate"], config_root, symlinks=True,
-        ignore=shutil.ignore_patterns(*CREDENTIALS, "projects", "sessions"),
-    )
-    for name in CREDENTIALS:
-        source = settings["credentialSources"][name]
-        if not os.path.exists(source):
-            raise SystemExit("credential source is missing: %s" % name)
-        os.symlink(source, os.path.join(config_root, name))
+        if not os.path.isdir(config_root) or config_digest(config_root) != config_digest(
+            settings["configTemplate"]
+        ):
+            raise SystemExit("config root differs from template: %s" % config_root)
+    else:
+        shutil.copytree(
+            settings["configTemplate"], config_root, symlinks=True,
+            ignore=shutil.ignore_patterns(*CREDENTIALS, "projects", "sessions"),
+        )
+        for name in CREDENTIALS:
+            source = settings["credentialSources"][name]
+            if not os.path.exists(source):
+                raise SystemExit("credential source is missing: %s" % name)
+            os.symlink(source, os.path.join(config_root, name))
     verify_credential_links(config_root, settings["credentialSources"])
     verify_subscription(settings, config_root)
     verify_credential_links(config_root, settings["credentialSources"])
+    claim_project_directory(config_root, workspace)
 
     renderer(variant, "render", workspace)
     marker = "[rule-experiment-loaded:%s]" % payload["cycle"]
@@ -236,21 +243,182 @@ def phase_path(workspace, value):
     return candidate if PHASE_RE.fullmatch(candidate) else None
 
 
+def add_usage(total, value):
+    """Accumulate the numeric leaves of Claude's nested message.usage object."""
+    if not isinstance(value, dict):
+        return
+    for key, child in value.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(child, dict):
+            nested = total.get(key)
+            if not isinstance(nested, dict):
+                nested = {}
+                total[key] = nested
+            add_usage(nested, child)
+        elif (
+            isinstance(child, (int, float))
+            and not isinstance(child, bool)
+            and math.isfinite(child)
+        ):
+            existing = total.get(key, 0)
+            total[key] = (existing if isinstance(existing, (int, float)) else 0) + child
+
+
+def session_path(config_root, path):
+    return os.path.relpath(path, config_root).replace(os.sep, "/")
+
+
+def project_directory(config_root, workspace):
+    name = re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(workspace))
+    return os.path.join(config_root, "projects", name)
+
+
+def claim_project_directory(config_root, workspace):
+    root = project_directory(config_root, workspace)
+    os.makedirs(root, exist_ok=True)
+    marker = os.path.join(root, ".rule-experiment-workspace")
+    identity = hashlib.sha256(os.path.abspath(workspace).encode("utf-8")).hexdigest()
+    if os.path.lexists(marker):
+        with open(marker, encoding="utf-8") as handle:
+            if handle.read() != identity + "\n":
+                raise SystemExit("Claude project directory collision between workspaces")
+    else:
+        with open(marker, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(identity + "\n")
+
+
+def redact_paths(text, paths):
+    for path in sorted({path for path in paths if path}, key=len, reverse=True):
+        text = text.replace(path, "[redacted-path]")
+        text = text.replace(path.replace(os.sep, "/"), "[redacted-path]")
+    return text
+
+
+def transcript_model(models, value):
+    """Record only a safe, explicit model identifier from a transcript."""
+    if isinstance(value, str) and MODEL_IDENTIFIER_RE.fullmatch(value):
+        models["counts"][value] = models["counts"].get(value, 0) + 1
+    else:
+        models["missing"] += 1
+
+
+def tool_result_id(block):
+    """Claude transcripts have used both spellings for the referenced tool ID."""
+    for key in ("tool_use_id", "toolUseId"):
+        value = block.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def summarize_tool_outcomes(calls, results):
+    """Pair only IDs that occur once; duplicate IDs cannot be attributed safely."""
+    occurrences, calls_without_id = {}, 0
+    for call_id in calls:
+        if call_id is None:
+            calls_without_id += 1
+        else:
+            occurrences[call_id] = occurrences.get(call_id, 0) + 1
+    identifiers = {call_id: [] for call_id, count in occurrences.items() if count == 1}
+    duplicate_calls = sum(count - 1 for count in occurrences.values() if count > 1)
+    duplicate_ids = {call_id for call_id, count in occurrences.items() if count > 1}
+
+    results_without_id = unmatched_results = ambiguous_results = 0
+    for result_id, is_error in results:
+        if result_id is None:
+            results_without_id += 1
+        elif result_id in identifiers:
+            identifiers[result_id].append(is_error)
+        elif result_id in duplicate_ids:
+            ambiguous_results += 1
+        else:
+            unmatched_results += 1
+
+    successful = explicit_errors = result_unobserved = 0
+    for observations in identifiers.values():
+        if not observations:
+            result_unobserved += 1
+        elif any(observations):
+            explicit_errors += 1
+        else:
+            successful += 1
+    return {
+        "calls": len(calls),
+        "callsWithId": len(calls) - calls_without_id,
+        "callsWithoutId": calls_without_id,
+        "duplicateCallIds": duplicate_calls,
+        "results": len(results),
+        "resultsWithId": len(results) - results_without_id,
+        "resultsWithoutId": results_without_id,
+        "unmatchedResults": unmatched_results,
+        "ambiguousResults": ambiguous_results,
+        "successful": successful,
+        "explicitErrors": explicit_errors,
+        "resultUnobserved": result_unobserved,
+    }
+
+
 def transcript_evidence(config_root, workspace, marker):
     documents, skills = {}, {}
-    assistant_count = marker_count = 0
-    sessions = sorted(glob.glob(os.path.join(config_root, "projects", "*", "*.jsonl")))
-    for path in sessions:
+    assistant_count = marker_count = tool_use_count = 0
+    usage, session_records = {}, []
+    coverage = {
+        "files": 0, "linesRead": 0, "jsonParseFailures": 0,
+        "objectRecords": 0, "nonObjectRecords": 0,
+        "timestampsAvailable": 0, "timestampsMissing": 0,
+        "assistantMessages": 0, "usageAvailable": 0, "usageMissing": 0,
+    }
+    models = {"counts": {}, "missing": 0}
+    tool_calls, tool_results = [], []
+    paths = sorted(glob.glob(
+        os.path.join(project_directory(config_root, workspace), "**", "*.jsonl"), recursive=True
+    ))
+    coverage["files"] = len(paths)
+    for path in paths:
+        first_timestamp = last_timestamp = None
         with open(path, encoding="utf-8", errors="replace") as handle:
             for line in handle:
+                coverage["linesRead"] += 1
                 try:
                     item = json.loads(line)
                 except ValueError:
+                    coverage["jsonParseFailures"] += 1
                     continue
-                if not isinstance(item, dict) or item.get("type") != "assistant":
+                if not isinstance(item, dict):
+                    coverage["nonObjectRecords"] += 1
+                    continue
+                coverage["objectRecords"] += 1
+                timestamp = item.get("timestamp")
+                if isinstance(timestamp, str) and timestamp:
+                    coverage["timestampsAvailable"] += 1
+                    if first_timestamp is None:
+                        first_timestamp = timestamp
+                    last_timestamp = timestamp
+                else:
+                    coverage["timestampsMissing"] += 1
+                if item.get("type") != "assistant":
+                    message = item.get("message")
+                    content = message.get("content") if isinstance(message, dict) else None
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_result":
+                                tool_results.append((tool_result_id(block), block.get("is_error") is True))
                     continue
                 assistant_count += 1
-                content = (item.get("message") or {}).get("content")
+                coverage["assistantMessages"] += 1
+                message = item.get("message")
+                if not isinstance(message, dict):
+                    coverage["usageMissing"] += 1
+                    transcript_model(models, None)
+                    continue
+                transcript_model(models, message.get("model"))
+                if isinstance(message.get("usage"), dict):
+                    coverage["usageAvailable"] += 1
+                    add_usage(usage, message["usage"])
+                else:
+                    coverage["usageMissing"] += 1
+                content = message.get("content")
                 if isinstance(content, str):
                     marker_count += content.count(marker)
                     continue
@@ -262,7 +430,12 @@ def transcript_evidence(config_root, workspace, marker):
                     if block.get("type") == "text" and isinstance(block.get("text"), str):
                         marker_count += block["text"].count(marker)
                         continue
-                    if block.get("type") != "tool_use" or not isinstance(block.get("input"), dict):
+                    if block.get("type") != "tool_use":
+                        continue
+                    tool_use_count += 1
+                    call_id = block.get("id")
+                    tool_calls.append(call_id if isinstance(call_id, str) and call_id else None)
+                    if not isinstance(block.get("input"), dict):
                         continue
                     args = block["input"]
                     if block.get("name") == "Skill":
@@ -284,7 +457,27 @@ def transcript_evidence(config_root, workspace, marker):
                         old, new = args.get("old_string"), args.get("new_string")
                         if isinstance(old, str) and isinstance(new, str) and old in documents[relative]:
                             documents[relative] = documents[relative].replace(old, new, 1)
-    return sessions, assistant_count, marker_count, documents, skills
+        session_records.append({
+            "path": session_path(config_root, path),
+            "firstTimestamp": first_timestamp,
+            "lastTimestamp": last_timestamp,
+        })
+    return (session_records, assistant_count, marker_count, tool_use_count, documents, skills, usage,
+            coverage, models, summarize_tool_outcomes(tool_calls, tool_results))
+
+
+def git_shortstat(root, base_head):
+    output = git(root, "diff", "--shortstat", "%s..HEAD" % base_head).stdout
+    fields = {"files": 0, "insertions": 0, "deletions": 0}
+    for name, pattern in (
+        ("files", r"(\d+) files? changed"),
+        ("insertions", r"(\d+) insertions?\(\+\)"),
+        ("deletions", r"(\d+) deletions?\(-\)"),
+    ):
+        match = re.search(pattern, output)
+        if match:
+            fields[name] = int(match.group(1))
+    return fields
 
 
 def collect(payload, identity):
@@ -294,28 +487,38 @@ def collect(payload, identity):
     workspace, config_root = token["workspace"], token["configRoot"]
     settings = profile(payload["profile"])
     verify_credential_links(config_root, settings["credentialSources"])
-    sessions, assistants, markers, documents, skills = transcript_evidence(
-        config_root, workspace, token["marker"]
-    )
+    (sessions, assistants, markers, tool_uses, documents, skills, usage, coverage, models,
+     tool_outcomes) = transcript_evidence(config_root, workspace, token["marker"])
+    private_paths = [config_root] + list(settings["credentialSources"].values())
+    documents = {
+        path: redact_paths(content, private_paths)
+        for path, content in documents.items()
+    }
     clean = not git(workspace, "status", "--porcelain").stdout.strip()
     commits = int(git(workspace, "rev-list", "--count", "%s..HEAD" % token["baseHead"]).stdout)
     verified = renderer(token["variantPath"], "verify", workspace, check=False).returncode == 0
-    evidence = json.dumps({
+    evidence = {
         "kind": EVIDENCE_KIND,
+        "sessions": sessions,
         "assistantCount": assistants,
+        "toolUseCount": tool_uses,
         "markerCount": markers,
         "phaseDocuments": documents,
-        "sessionCount": len(sessions),
         "skillInvocations": skills,
+        "usage": usage,
+        "transcriptCoverage": coverage,
+        "transcriptModels": models,
+        "toolOutcomes": tool_outcomes,
+        "shortstat": git_shortstat(workspace, token["baseHead"]),
         "clean": clean,
         "commitsAfterBase": commits,
-    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    }
     return {
         "protocolVersion": 1,
         "adapterIdentity": identity,
         "success": bool(sessions) and assistants > 0 and clean and commits >= 2,
         "ruleLoaded": verified and markers > 0,
-        "evidence": [evidence],
+        "evidence": evidence,
     }
 
 
