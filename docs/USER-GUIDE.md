@@ -35,7 +35,15 @@ promote できません。既に review のある cycle は terminate できま�
 python3 apparatus/cycle.py --environment <environment.json> terminate --cycle <cycle> --status abandoned --reason "operator stopped the run"
 ```
 
-失敗した cycle の declaration、arm、review は編集しません。修正後は新しい cycle id で再実行します。
+元の declaration、保存済み arm の成果、review、termination は編集しません。保存済み成果物や
+証拠の再検査・再解釈で判断できる場合は、被検体を再実行せず、その結果と元記録・評価条件の
+違いを既存の記録先へ残します。再検査に変更を伴う場合は元資料を保持して作業用の複製を使い、
+旧 verdict や品質到達時刻を置き換えません。新たに被検体を実行する場合は新しい cycle id を
+使います。評価器の修正だけを理由に、被検体の再実行を自動で要求しません。
+
+これは既存 cycle の review／promote を再開する操作ではありません。terminated cycle の禁止と
+baseline の正規の状態遷移は維持します。再評価の扱いと現行実装上の制約は
+[Protocol and records](RULE-EXPERIMENT.md)を参照してください。
 
 `promote` は treatment variant の、cycle 宣言時に凍結した bytes を stable へ載せます。
 その後に baseline が進んでいる cycle を promote すると、測定した rule 以外の placement と

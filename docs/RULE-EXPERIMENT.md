@@ -7,6 +7,10 @@ treatment の2 arm、同じ base、workload、evaluation、subject list と、ar
 tree / managed SHA-256 を持ちます。任意の非空 `note` は、何を測り直すか、なぜ cycle を立てたかを
 残します。`cycle.py` は source の current bytes と宣言を照合します。
 
+入力の固定は Subject の挙動の固定ではありません。逸脱は影響する比較・結論・操作を
+区分し、独立した観測を保持します（[Constitution](../CONSTITUTION.md) の Evidence and
+proportional rigor、Invariant 1）。
+
 `materialize` は base も pinned commit だけを arm workspace へ取り出し、history は
 持ち込みません。宣言が base の working tree から取り除いた rule bytes は pin した commit の
 history に残っており、持ち込めば arm の中から `git log` 1回で対照条件そのものへ届きます。
@@ -88,6 +92,24 @@ reference と、任意の numeric `value` を持ちます。`value` の boolean 
 Treatment の改善が1件以上あり、regression と unknown が無い場合だけ
 review verdict は `promote` です。
 
+この verdict は当該 cycle から baseline を変更できるかの判定であり、観測全体の情報価値や
+あらゆる比較・分析の成立性を一括判定するものではありません。`promote` 不可だけを理由に、
+保存済みの観測を捨てたり、被検体の再実行を必須にしたりしません。
+
+評価を設計するときは、採用に必須の条件、比較の解釈に必要な条件、参考観測・診断情報を
+役割として区別します。これは新しい schema の分類ではありません。core の criteria へは
+当該採否に必要な条件を定義し、参考情報は既存の sanitized evidence や記録で扱います。
+比較条件は declaration 等の既存の所有箇所で固定し、参考観測の不足を無関係な採否の
+blanket gate にしません。採点項目や役割は結果を見る前に定めます。
+
+現行 core に渡した criteria の unknown は引き続き `promote` を妨げます。参考情報と呼び替えて
+既存の必須条件を飛ばすことはできません。固定済みの条件を変更する場合は、変更前の結果を
+保持した上で評価条件の改訂として区分し、過去の結果を新しい条件の成績へ置換しません。
+
+製品の合否、評価器・fixture の成立性、比較可能性、採用可否を混同しません。
+必要な非破壊性が失われていれば製品の失敗として扱い、単なる想定文言の違いとは区別します。
+一部の評価が判定不能でも、その影響を受けない観測済みの成功・失敗を消しません。
+
 `apparatus/schemas/review.schema.json` は declaration digest、base commit、workload / evaluation
 digest、experiment と任意 note、両 arm の variant identity / managed bytes 合計、adapter identity /
 逐語 `prepare` / `collect` / subject version、criteria、verdict、採用対象 treatment digest を1件に
@@ -101,6 +123,19 @@ reason、declaration SHA-256 を固定し、同じ payload の再実行は成功
 異なる payload と reviewed cycle は拒否されます。termination record がある cycle は materialize、
 review、promote を実行できません。terminate は arm、release、runtime `.adapter-state` を削除しません。
 同じ cycle の materialize、review、terminate は OS lock で排他され、競合した呼び出しは待機せず拒否されます。
+
+### 保存済み証拠の再利用
+
+保存済みの成果物・証拠の再検査・再解釈は、元の cycle の変更や再開とは別です。
+元記録・対象成果物・評価条件の違い・再評価結果を既存の experiment source または判断の
+記録先から参照できるようにし、元の review、termination、verdict、品質到達時刻を変更しません。
+新規の保存基盤や専用コマンドを前提にしません。必要な証拠が残っていなければ、その範囲を
+再評価不能として明示します。
+
+この分析は terminated cycle に対する materialize／review／promote の禁止を解除せず、
+再評価メモから直接 baseline を変更する経路も設けません。採用には、その時点の正規の
+review／promote 契約を満たす必要があります。現行の正規経路が再実行を必要とする場合も、
+分析・再解釈そのものに再実行が必要なのか、baseline 変更の契約上必要なのかを区別します。
 
 ## Baseline transition
 
