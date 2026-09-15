@@ -1,7 +1,10 @@
 # Rule experiment apparatus
 
-Agent rule の変更だけを control / treatment 間で変え、行動差を計測する最小の装置です。
-評価した treatment bytes と同じ bytes だけを stable baseline へ反映できます。
+Agent に与える rule・skill の変更が実際の行動と成果へ及ぼす違いを調べ、
+利用可能な証拠と資源から採否・現行維持・適用条件の判断を進めるための装置です。
+条件を揃えた control / treatment 比較と検証はその手段であり、被検体の行動の決定性や
+実験の形式的完全性自体を目的にしません。採用できない試行の観測も、言える範囲を
+限定して利用します。baseline へ反映できるのは、評価した treatment と同一の bytes です。
 
 公開操作は `materialize`、`review`、`promote`、`terminate`、`rollback` の5つです。CLI 固有の設定、
 認証、起動、rule 配置、実行証拠の収集は versioned subject adapter が所有し、core は
