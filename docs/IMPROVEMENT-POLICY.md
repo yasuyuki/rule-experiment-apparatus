@@ -23,6 +23,21 @@ A component belongs in the apparatus core only if it is directly required to:
 
 Something may be required to operate the wider system without belonging in the apparatus core. Usability does not move responsibilities excluded by the Constitution into the core; improve the layer that owns them.
 
+## External sourcing and ownership
+
+A necessary capability does not imply a necessary in-house implementation. For existing and proposed elements, use available external software, tools, or services rather than build or retain an equivalent, keeping only necessary local integration. Moving an in-house implementation outside the core does not by itself satisfy this rule.
+
+An in-house equivalent, including an independently maintained fork, is justified only when no viable external option remains because either:
+
+1. a decisive obstacle prevents the required capability from being realized through external solutions, even with configuration, composition, or proportionate integration; or
+2. maintenance has genuinely ceased and this creates a concrete dependency risk.
+
+Rejecting one candidate does not establish that all alternatives are unsuitable. Judge obstacles against required outcomes and contracts, not preferred internal designs. Lack of recent releases alone establishes neither ceased maintenance nor dependency risk. Familiarity, a desire for control, avoiding dependencies in principle, and sunk effort are not exceptions.
+
+Apply the existing improvement order to remove unnecessary capabilities and redundant implementations. Where an exception is necessary, own only what is needed to overcome it; do not use integration or forks to recreate replaceable external functionality. Keep responsibilities in their owning layer and preserve necessary protections, approvals, and authorized resource limits.
+
+Support exceptions with proportionate investigation and existing evidence and decision records. Do not introduce a procurement framework, recurring audit, approval layer, or duplicate record merely to assert this principle.
+
 ## Improvement rule
 
 For every existing or proposed element, prefer, in this order:
