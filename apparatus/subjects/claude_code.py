@@ -148,7 +148,13 @@ def inventory_inputs(settings):
     spec.loader.exec_module(place)
     args = SimpleNamespace(declaration=str(declaration), rules=rule_paths, skills=[str(root / "skills")], site=binding["site"])
     context = place.load_context(args)
-    place.inventory_preflight(args, context, binding["site"], mode="construction", constructing_agent="claude")
+    # The controller invokes this adapter with WSL -e, which need not include
+    # the user's vendor directory in PATH. Resolve the declared vendor entry
+    # from its explicit profile path without changing the child launch PATH.
+    search_path = os.path.dirname(settings["binary"]) + os.pathsep + os.environ.get("PATH", "")
+    place.inventory_preflight(args, context, binding["site"],
+                              resolver=lambda name: shutil.which(name, path=search_path),
+                              mode="construction", constructing_agent="claude")
     site = context[2][binding["site"]]
     config = Path(context[0]["tools"]["claude"]["configHome"]["default"].replace("$HOME", site["home"]))
     paths = ("rules/agent-rules--environment-inventory-required.md", "skills/maintain-environment-inventory")
