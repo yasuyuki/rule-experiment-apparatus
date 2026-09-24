@@ -26,14 +26,14 @@ jobs:
       - run: python apparatus/tests/test_cycle.py
       - run: python apparatus/tests/test_codex_adapter.py
 
-  codex-collector:
+  codex-telemetry-query:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
           repository: yasuyuki/agent-telemetry
-          ref: 44fd8c306f259f9f5828c2575397b82720cb2e69
+          ref: bdf0e5d09b765f1c1e8a852180830a742b747a37
           path: collector
       - uses: actions/setup-python@v5
         with:
@@ -44,7 +44,7 @@ jobs:
           git config --global user.email fixture@example.invalid
       - run: python -m unittest discover -s tests -v
         working-directory: collector
-      - name: Require installed collector integration and source identity
+      - name: Require installed telemetry query integration and source identity
         run: |
           export AGENT_TELEMETRY_PYTHON="$(command -v python)"
           export AGENT_TELEMETRY_SOURCE="$GITHUB_WORKSPACE/collector"
