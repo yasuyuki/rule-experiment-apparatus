@@ -26,24 +26,29 @@ and the arm-specific telemetry options.
 
 `prepare` copies the template to an arm-specific `CODEX_HOME`, links the private
 `auth.json`, applies and checks the variant placement, and returns a launch command
-with the same loopback OTLP settings for every arm.  Start `agent-telemetry serve`
-manually with the profile DB before either arm.  The DB must be outside the Git
-workspace.  No service or wrapper is installed by the adapter.
+with the same loopback OTLP settings for every arm. Start the pinned
+`agent-telemetry-collector` binary manually with its `collector/config.yaml`
+before either arm. Set `AGENT_TELEMETRY_PLATFORM=codex` and
+`AGENT_TELEMETRY_DB` to the profile DB's absolute path outside the Git workspace.
+The private setting owner records the binary, config, exporter source revision,
+and their SHA-256 values. Stop any old Python receiver before binding the
+Collector to the same endpoint. No service or wrapper is installed by the adapter.
 
 Run each arm as a fresh top-level Codex session.  `collect` selects exactly one
 native `sessions/**/*.jsonl` whose `session_meta` has the arm workspace and is
 neither resumed nor a subagent.  It records only that session ID, the marker count,
 and `task_complete` count.  It never copies native transcript bodies.
 
-The telemetry query runs with the configured collector Python, reads SQLite
-read-only, and stores the allowlisted Record rows with event counts and missing
+The telemetry query runs with the configured `agent-telemetry` Python package,
+reads SQLite read-only, and stores the allowlisted Record rows with event counts and missing
 field counts.  Zeros stay zero.  Token values are event values and are not summed.
 An unavailable DB or query is recorded as auxiliary telemetry status; native task
 completion and rule marker observation remain separate observations.
 
-The collector identity records the installed package version and SHA-256 of every
-Python source file, checked against `telemetrySource`. Keep the external profile
-and installed collector unchanged from receiver startup through both collections.
+The query identity records the installed package version and SHA-256 of every
+Python source file, checked against `telemetrySource`. Keep the external profile,
+query package, and Collector binary/config unchanged from receiver startup through
+both collections.
 The adapter does not lock those external resources or authenticate the receiver.
 
 Run the synthetic adapter checks from this repository on POSIX. Set
