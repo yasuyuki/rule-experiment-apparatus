@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 
 
 if os.name != "posix":
@@ -317,6 +318,50 @@ fi
     assert zero_usage == {"input_tokens": 0, "output_tokens": 0}
     assert zero_coverage["usageAvailable"] == 1 and zero_coverage["usageMissing"] == 0
     assert zero_models == {"counts": {"claude-zero:1": 1}, "missing": 0}
+    # Inventory preparation is common to both arms, outside variant bytes.
+    common = {"rules/agent-rules--environment-inventory-required.md": b"common binding\n",
+              "skills/maintain-environment-inventory/SKILL.md": b"common skill\n"}
+    common_config = temp / "inventory-config"
+    common_payload = {"profile": profile, "workspace": str(workspace("inventory-a")),
+                      "configRoot": str(common_config), "variant": {"path": str(variant), "digest": digest},
+                      "cycle": "fixture"}
+    with mock.patch.object(claude_code, "inventory_inputs", return_value=common):
+        first = claude_code.prepare(common_payload, "fixture")
+        common_payload["workspace"] = str(workspace("inventory-b"))
+        second = claude_code.prepare(common_payload, "fixture")
+        assert first["configIdentity"] == second["configIdentity"]
+        assert first["variantDigest"] == second["variantDigest"] == digest
+        for relative, contents in common.items():
+            assert (common_config / relative).read_bytes() == contents
+            assert not (template / relative).exists()
+        tampered = common_config / next(iter(common))
+        tampered.write_bytes(b"changed\n")
+        before = claude_code.config_digest(str(common_config))
+        try:
+            claude_code.prepare(common_payload, "fixture")
+        except SystemExit as error:
+            assert "inventory common placement differs" in str(error)
+        else:
+            raise AssertionError("modified common inventory was accepted")
+        assert claude_code.config_digest(str(common_config)) == before
+        tampered.unlink()
+        try:
+            claude_code.prepare(common_payload, "fixture")
+        except SystemExit as error:
+            assert "inventory common placement differs" in str(error)
+        else:
+            raise AssertionError("missing common inventory was silently repaired")
+        assert not tampered.exists()
+    blocked_config = temp / "inventory-blocked"
+    common_payload["configRoot"] = str(blocked_config)
+    with mock.patch.object(claude_code, "inventory_inputs", side_effect=SystemExit("lifecycle rejected")):
+        try:
+            claude_code.prepare(common_payload, "fixture")
+        except SystemExit as error:
+            assert str(error) == "lifecycle rejected"
+        else:
+            raise AssertionError("lifecycle failure was ignored")
+    assert not blocked_config.exists()
 
     settings = claude_code.profile(profile)
     for invalid in (
