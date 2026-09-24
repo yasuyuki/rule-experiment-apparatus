@@ -84,12 +84,13 @@ def profile(raw):
         value = json.loads(raw)
     except (TypeError, ValueError) as error:
         raise SystemExit("invalid Claude adapter profile: %s" % error)
-    required = {"binary", "configTemplate", "credentialSources", "launchPrefix"}
+    required = {"binary", "configTemplate", "credentialSources", "launchPrefix",
+                "runtimeBinary", "runtimeConfig"}
     if not isinstance(value, dict) or set(value) - {"inventory"} != required:
         raise SystemExit("Claude adapter profile must contain only %s" % ", ".join(sorted(required)))
     if not all(
         isinstance(value[key], str) and value[key]
-        for key in ("binary", "configTemplate", "launchPrefix")
+        for key in ("binary", "configTemplate", "launchPrefix", "runtimeBinary", "runtimeConfig")
     ):
         raise SystemExit("Claude adapter profile values must be non-empty strings")
     sources = value["credentialSources"]
@@ -102,6 +103,21 @@ def profile(raw):
         value[key] = os.path.expanduser(value[key])
         if not os.path.isabs(value[key]):
             raise SystemExit("Claude adapter profile %s must be absolute or home-relative" % key)
+    for key in ("runtimeBinary", "runtimeConfig"):
+        if not os.path.isabs(value[key]):
+            raise SystemExit("Claude adapter profile %s must be absolute" % key)
+        if not os.path.isfile(value[key]):
+            raise SystemExit("Claude adapter profile %s is missing" % key)
+    if os.path.realpath(value["runtimeBinary"]) == os.path.realpath(value["binary"]):
+        raise SystemExit("Claude runtime must differ from vendor binary")
+    try:
+        with open(value["runtimeConfig"], encoding="utf-8") as handle:
+            runtime = json.load(handle)
+        vendor = runtime["tools"]["claude"]["argv"][0]
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        raise SystemExit("Claude runtime config has no vendor binding")
+    if not isinstance(vendor, str) or os.path.realpath(vendor) != os.path.realpath(value["binary"]):
+        raise SystemExit("Claude runtime vendor differs from version/auth binary")
     for name in CREDENTIALS:
         sources[name] = os.path.expanduser(sources[name])
         if not os.path.isabs(sources[name]):
@@ -268,8 +284,9 @@ def prepare(payload, identity):
     extra = "".join(
         " --add-dir %s" % shlex.quote(material["path"]) for material in payload.get("materials", [])
     )
-    inner = "cd %s && CLAUDE_CONFIG_DIR=%s %s%s" % (
-        tuple(shlex.quote(value) for value in (workspace, config_root, settings["binary"])) + (extra,)
+    inner = "cd %s && CLAUDE_CONFIG_DIR=%s %s --config %s claude%s" % (
+        tuple(shlex.quote(value) for value in (workspace, config_root, settings["runtimeBinary"],
+                                               settings["runtimeConfig"])) + (extra,)
     )
     return {
         "protocolVersion": 1,

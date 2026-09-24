@@ -108,18 +108,42 @@ else: raise SystemExit(2)
     binary = temp / "codex"
     write(binary, "#!/bin/sh\necho fixture-codex\n")
     binary.chmod(0o755)
+    runtime_binary = temp / "agent-runtime"
+    write(runtime_binary, "#!/bin/sh\nexit 2\n")
+    runtime_binary.chmod(0o755)
+    runtime_config = temp / "runtime.json"
+    write(runtime_config, json.dumps({"version": 1, "tools": {"codex": {"argv": [str(binary)]}}}))
     template, auth, trial = temp / "template", temp / "auth.json", temp / "trial"
     template.mkdir(); trial.mkdir(); write(template / "config.toml", "")
     write(auth, "fixture")
     launch_profile = json.dumps({"binary": str(binary), "configTemplate": str(template),
         "authSource": str(auth), "telemetryPython": sys.executable,
         "telemetrySource": str(temp / "missing-collector"), "telemetryDb": str(db),
-        "endpoint": "http://127.0.0.1:4318/v1/logs", "launchArgv": ["true"]})
+        "endpoint": "http://127.0.0.1:4318/v1/logs",
+        "launchArgv": [str(runtime_binary), "--config", str(runtime_config), "codex"]})
+    for invalid_argv in (["true"], [str(binary), "--config", str(runtime_config), "codex"],
+                         [str(runtime_binary), "--config", str(temp / "missing.json"), "codex"]):
+        invalid = json.loads(launch_profile)
+        invalid["launchArgv"] = invalid_argv
+        try:
+            codex.profile(json.dumps(invalid))
+            raise AssertionError("invalid runtime launch was accepted")
+        except SystemExit:
+            pass
+    write(runtime_config, json.dumps({"version": 1, "tools": {"codex": {"argv": [str(runtime_binary)]}}}))
+    try:
+        codex.profile(launch_profile)
+        raise AssertionError("runtime vendor mismatch was accepted")
+    except SystemExit:
+        pass
+    write(runtime_config, json.dumps({"version": 1, "tools": {"codex": {"argv": [str(binary)]}}}))
     prepared = codex.prepare({"protocolVersion": 1, "cycle": "whole", "arm": "control",
         "workspace": str(trial), "configRoot": str(temp / "homes"),
         "variant": {"path": str(variant), "digest": codex.tree_digest(str(variant), codex.MANAGED)},
         "workload": {"path": "unused", "digest": "0" * 64}, "materials": [],
         "profile": launch_profile}, "identity")
+    assert str(runtime_binary) in prepared["launch"]
+    assert "--config " + str(runtime_config) + " codex exec --json" in prepared["launch"]
     session_path = Path(prepared["token"]["configRoot"]) / "sessions" / "whole.jsonl"
     write(session_path, "\n".join(json.dumps(item) for item in (
         {"type": "session_meta", "payload": {"id": "whole.session", "cwd": str(trial), "source": "cli"}},

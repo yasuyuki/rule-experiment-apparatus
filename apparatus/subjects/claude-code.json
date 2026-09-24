@@ -3,7 +3,7 @@
   "protocolVersion": 1,
   "adapter": {
     "entrypoint": "claude_code.py",
-    "sha256": "207854bb1868a755888765850149f135aa85153de0704ea10bd7681f760403d9"
+    "sha256": "0b08606eb0fd2d30994f31ff0b3cbeca00a42aff488760755fd855b61eac2f6b"
   },
   "profileRef": "claude-code"
 }

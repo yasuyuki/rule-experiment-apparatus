@@ -1,7 +1,7 @@
 # Codex subject adapter
 
-The `codex` descriptor uses the public `agent-rules` `place.py start` entry point
-for its emitted launch command.  Its opaque environment profile has these exact
+The `codex` descriptor launches through the independently installed `agent-runtime`.
+Its opaque environment profile has these exact
 keys; all paths are supplied by the private environment descriptor. The emitted
 launch and runtime token contain workspace/config paths, so reviews belong in
 the private control repository. The authentication source path is not returned.
@@ -15,9 +15,14 @@ the private control repository. The authentication source path is not returned.
   "telemetrySource": "/absolute/path/to/agent-telemetry",
   "telemetryDb": "/absolute/path/outside-git/events.sqlite3",
   "endpoint": "http://127.0.0.1:4318/v1/logs",
-  "launchArgv": ["python3", "/absolute/path/to/agent-rules/bin/place.py", "start", "--declaration", "/absolute/path/to/PLACEMENT.md", "--rules", "/absolute/path/to/rules", "W1", "codex", "--"]
+  "launchArgv": ["/absolute/path/to/agent-runtime", "--config", "/absolute/path/to/runtime.json", "codex"]
 }
 ```
+
+The runtime config pins the independent workspace-lifecycle entry and binds its
+Codex vendor argv. The `binary` above remains the vendor version probe. Runtime
+configuration is explicit in `launchArgv`; the adapter appends `exec --json -C`
+and the arm-specific telemetry options.
 
 `prepare` copies the template to an arm-specific `CODEX_HOME`, links the private
 `auth.json`, applies and checks the variant placement, and returns a launch command
