@@ -1,8 +1,7 @@
 # Codex subject adapter
 
 The `codex` descriptor launches through the independently installed `agent-runtime`.
-Its opaque environment profile has these exact
-keys; all paths are supplied by the private environment descriptor. The emitted
+Its opaque environment profile has these required keys; all paths are supplied by the private environment descriptor. The emitted
 launch and runtime token contain workspace/config paths, so reviews belong in
 the private control repository. The authentication source path is not returned.
 
@@ -11,22 +10,37 @@ the private control repository. The authentication source path is not returned.
   "binary": "/absolute/path/to/codex",
   "configTemplate": "/absolute/path/to/codex-template",
   "authSource": "/absolute/path/to/auth.json",
+  "launchArgv": ["/absolute/path/to/agent-runtime", "--config", "/absolute/path/to/runtime.json", "codex"]
+}
+```
+
+Telemetry is optional enrichment. The profile above disables it: no receiver,
+query package, source checkout, or DB is required. The launch has no adapter-added
+OTel settings, and `collect` records `telemetry: {"status": "disabled"}` while
+preserving native completion and rule marker observations.
+
+To enable telemetry, add **all four** of `telemetryPython`, `telemetrySource`,
+`telemetryDb`, and `endpoint` to the profile. Partial configurations are rejected.
+Use the fixed agent-telemetry 0.2.0 query package and Collector 0.161.0 source
+contract, with a loopback HTTP `/v1/logs` endpoint. For example:
+
+```json
+{
   "telemetryPython": "/absolute/path/to/telemetry-python",
   "telemetrySource": "/absolute/path/to/agent-telemetry",
   "telemetryDb": "/absolute/path/outside-git/events.sqlite3",
-  "endpoint": "http://127.0.0.1:4318/v1/logs",
-  "launchArgv": ["/absolute/path/to/agent-runtime", "--config", "/absolute/path/to/runtime.json", "codex"]
+  "endpoint": "http://127.0.0.1:4318/v1/logs"
 }
 ```
 
 The runtime config pins the independent workspace-lifecycle entry and binds its
 Codex vendor argv. The `binary` above remains the vendor version probe. Runtime
 configuration is explicit in `launchArgv`; the adapter appends `exec --json -C`
-and the arm-specific telemetry options.
+and, only when enabled, the arm-specific telemetry options.
 
 `prepare` copies the template to an arm-specific `CODEX_HOME`, links the private
 `auth.json`, applies and checks the variant placement, and returns a launch command
-with the same loopback OTLP settings for every arm. Start the pinned
+with the same loopback OTLP settings for every enabled arm. When enabled, start the pinned
 `agent-telemetry-collector` binary manually with its `collector/config.yaml`
 before either arm. Set `AGENT_TELEMETRY_PLATFORM=codex` and
 `AGENT_TELEMETRY_DB` to the profile DB's absolute path outside the Git workspace.
@@ -39,7 +53,7 @@ native `sessions/**/*.jsonl` whose `session_meta` has the arm workspace and is
 neither resumed nor a subagent.  It records only that session ID, the marker count,
 and `task_complete` count.  It never copies native transcript bodies.
 
-The telemetry query runs with the configured `agent-telemetry` Python package,
+When enabled, the telemetry query runs with the configured `agent-telemetry` Python package,
 reads SQLite read-only, and stores the allowlisted Record rows with event counts and missing
 field counts.  Zeros stay zero.  Token values are event values and are not summed.
 An unavailable DB or query is recorded as auxiliary telemetry status; native task

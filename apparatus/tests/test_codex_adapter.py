@@ -121,6 +121,19 @@ else: raise SystemExit(2)
         "telemetrySource": str(temp / "missing-collector"), "telemetryDb": str(db),
         "endpoint": "http://127.0.0.1:4318/v1/logs",
         "launchArgv": [str(runtime_binary), "--config", str(runtime_config), "codex"]})
+    disabled_profile = json.loads(launch_profile)
+    for key in ("telemetryPython", "telemetrySource", "telemetryDb", "endpoint"):
+        disabled_profile.pop(key)
+    disabled_profile = json.dumps(disabled_profile)
+    assert codex.profile(disabled_profile)
+    for key in ("telemetryPython", "telemetrySource", "telemetryDb", "endpoint"):
+        partial = json.loads(launch_profile)
+        partial.pop(key)
+        try:
+            codex.profile(json.dumps(partial))
+            raise AssertionError("partial telemetry profile was accepted")
+        except SystemExit:
+            pass
     for invalid_argv in (["true"], [str(binary), "--config", str(runtime_config), "codex"],
                          [str(runtime_binary), "--config", str(temp / "missing.json"), "codex"]):
         invalid = json.loads(launch_profile)
@@ -144,6 +157,7 @@ else: raise SystemExit(2)
         "profile": launch_profile}, "identity")
     assert str(runtime_binary) in prepared["launch"]
     assert "--config " + str(runtime_config) + " codex exec --json" in prepared["launch"]
+    assert "otel.exporter" in prepared["launch"]
     session_path = Path(prepared["token"]["configRoot"]) / "sessions" / "whole.jsonl"
     write(session_path, "\n".join(json.dumps(item) for item in (
         {"type": "session_meta", "payload": {"id": "whole.session", "cwd": str(trial), "source": "cli"}},
@@ -154,6 +168,35 @@ else: raise SystemExit(2)
     collected = codex.collect({"protocolVersion": 1, "workspace": str(trial),
                                "profile": launch_profile, "token": prepared["token"]}, "identity")
     assert collected["success"] and collected["ruleLoaded"]
+    disabled_trial = temp / "disabled-trial"
+    disabled_trial.mkdir()
+    disabled = codex.prepare({"protocolVersion": 1, "cycle": "whole", "arm": "treatment",
+        "workspace": str(disabled_trial), "configRoot": str(temp / "homes"),
+        "variant": {"path": str(variant), "digest": codex.tree_digest(str(variant), codex.MANAGED)},
+        "profile": disabled_profile}, "identity")
+    assert "otel." not in disabled["launch"] and "4318" not in disabled["launch"]
+    disabled_session = Path(disabled["token"]["configRoot"]) / "sessions" / "whole.jsonl"
+    write(disabled_session, "\n".join(json.dumps(item) for item in (
+        {"type": "session_meta", "payload": {"id": "disabled.session", "cwd": str(disabled_trial), "source": "cli"}},
+        {"type": "event_msg", "payload": {"type": "task_started"}},
+        {"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": disabled["token"]["marker"]}]}},
+        {"type": "event_msg", "payload": {"type": "task_complete"}},
+    )) + "\n")
+    original_telemetry = codex.telemetry
+    codex.telemetry = lambda *_: (_ for _ in ()).throw(AssertionError("disabled query ran"))
+    try:
+        disabled_collected = codex.collect({"protocolVersion": 1, "workspace": str(disabled_trial),
+            "profile": disabled_profile, "token": disabled["token"]}, "identity")
+        assert disabled_collected["success"] and disabled_collected["ruleLoaded"]
+        assert disabled_collected["evidence"]["telemetry"] == {"status": "disabled"}
+        with disabled_session.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "event_msg", "payload": {"type": "task_started"}}) + "\n")
+        disabled_resumed = codex.collect({"protocolVersion": 1, "workspace": str(disabled_trial),
+            "profile": disabled_profile, "token": disabled["token"]}, "identity")
+        assert not disabled_resumed["success"] and not disabled_resumed["ruleLoaded"]
+        assert disabled_resumed["evidence"]["telemetry"] == {"status": "disabled"}
+    finally:
+        codex.telemetry = original_telemetry
     with session_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"type": "event_msg", "payload": {"type": "task_started"}}) + "\n")
     resumed = codex.collect({"protocolVersion": 1, "workspace": str(trial),
