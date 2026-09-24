@@ -62,22 +62,24 @@ def profile(raw):
         value = json.loads(raw)
     except (TypeError, ValueError) as exc:
         raise SystemExit("invalid Codex adapter profile: %s" % exc)
-    required = {"binary", "configTemplate", "authSource", "telemetryPython", "telemetrySource",
-                "telemetryDb", "endpoint", "launchArgv"}
-    if not isinstance(value, dict) or set(value) != required:
-        raise SystemExit("Codex adapter profile must contain only %s" % ", ".join(sorted(required)))
-    for name in required - {"endpoint", "launchArgv"}:
+    required = {"binary", "configTemplate", "authSource", "launchArgv"}
+    optional = {"telemetryPython", "telemetrySource", "telemetryDb", "endpoint"}
+    if not isinstance(value, dict) or set(value) not in (required, required | optional):
+        raise SystemExit("Codex adapter profile requires %s; telemetry requires all of %s" %
+                         (", ".join(sorted(required)), ", ".join(sorted(optional))))
+    for name in set(value) - {"endpoint", "launchArgv"}:
         value[name] = absolute(value[name], name)
-    try:
-        endpoint = urlsplit(value["endpoint"])
-        valid = (endpoint.scheme == "http" and endpoint.hostname in ("127.0.0.1", "::1")
-                 and endpoint.port is not None and endpoint.path == "/v1/logs"
-                 and not endpoint.username and not endpoint.password
-                 and not endpoint.query and not endpoint.fragment)
-    except (TypeError, ValueError):
-        valid = False
-    if not valid:
-        raise SystemExit("Codex telemetry endpoint must be a loopback HTTP /v1/logs URL")
+    if optional <= set(value):
+        try:
+            endpoint = urlsplit(value["endpoint"])
+            valid = (endpoint.scheme == "http" and endpoint.hostname in ("127.0.0.1", "::1")
+                     and endpoint.port is not None and endpoint.path == "/v1/logs"
+                     and not endpoint.username and not endpoint.password
+                     and not endpoint.query and not endpoint.fragment)
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise SystemExit("Codex telemetry endpoint must be a loopback HTTP /v1/logs URL")
     for name in ("launchArgv",):
         if (not isinstance(value[name], list) or not value[name]
                 or not all(isinstance(arg, str) and arg for arg in value[name])):
@@ -140,10 +142,12 @@ def prepare(payload, identity):
     version = run([settings["binary"], "--version"])
     subject_version = (version.stdout or version.stderr).strip().splitlines() or ["unknown"]
     config_id = config_digest(config_root)
-    otel = '{otlp-http={endpoint="%s",protocol="json"}}' % settings["endpoint"]
     command = ["env", "CODEX_HOME=" + config_root, *settings["launchArgv"], "exec", "--json",
-               "-C", workspace, "-c", "otel.log_user_prompt=false", "-c", 'otel.trace_exporter="none"',
-               "-c", "otel.metrics_exporter=\"none\"", "-c", "otel.exporter=" + otel]
+               "-C", workspace]
+    if "endpoint" in settings:
+        otel = '{otlp-http={endpoint="%s",protocol="json"}}' % settings["endpoint"]
+        command += ["-c", "otel.log_user_prompt=false", "-c", 'otel.trace_exporter="none"',
+                    "-c", 'otel.metrics_exporter="none"', "-c", "otel.exporter=" + otel]
     return {"protocolVersion": 1, "adapterIdentity": identity, "subjectVersion": subject_version[0],
             "configIdentity": config_id, "variantDigest": digest, "placements": placement(workspace),
             "launch": " ".join(shlex.quote(arg) for arg in command),
@@ -262,7 +266,9 @@ def collect(payload, identity):
     if payload["workspace"] != token.get("workspace"):
         raise SystemExit("workspace differs from prepare token")
     selected, error = native_session(token)
-    evidence = {"nativeSession": {"status": error or "selected"}}
+    enabled = "telemetryPython" in settings
+    evidence = {"nativeSession": {"status": error or "selected"},
+                "telemetry": {"status": "disabled"} if not enabled else {"status": "unavailable"}}
     markers = completed = 0
     if selected:
         path, session_id = selected
@@ -270,14 +276,17 @@ def collect(payload, identity):
         if started != 1 or completed > 1:
             selected, error = None, "resumed" if started > 1 or completed > 1 else "incomplete-native-record"
             evidence["nativeSession"] = {"status": error, "taskStartedCount": started}
-            evidence["telemetry"] = {"status": "unavailable", "reason": "native-session-" + error}
+            if enabled:
+                evidence["telemetry"] = {"status": "unavailable", "reason": "native-session-" + error}
             return {"protocolVersion": 1, "adapterIdentity": identity, "success": False,
                     "ruleLoaded": False, "evidence": evidence}
         evidence["nativeSession"].update({"id": session_id, "markerCount": markers,
                                            "taskCompleteCount": completed, "taskStartedCount": started})
-        evidence["telemetry"] = telemetry(settings, session_id)
+        if enabled:
+            evidence["telemetry"] = telemetry(settings, session_id)
     else:
-        evidence["telemetry"] = {"status": "unavailable", "reason": "native-session-" + error}
+        if enabled:
+            evidence["telemetry"] = {"status": "unavailable", "reason": "native-session-" + error}
     try:
         renderer(token["variantPath"], "verify", payload["workspace"])
         verified = True

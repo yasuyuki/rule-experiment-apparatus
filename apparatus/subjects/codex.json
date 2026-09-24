@@ -3,7 +3,7 @@
   "protocolVersion": 1,
   "adapter": {
     "entrypoint": "codex.py",
-    "sha256": "63c6f5019c67a58f7b68ee7a8b309f8aac896d4ebcaf8a032773360360efa646"
+    "sha256": "12589b7b7940bd5495f685debcf23a03a5aebad7fb40f30ab9a1127143dad022"
   },
   "profileRef": "codex"
 }
