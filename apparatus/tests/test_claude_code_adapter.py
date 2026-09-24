@@ -88,10 +88,43 @@ else
 fi
 ''')
     binary.chmod(0o755)
+    runtime_binary = temp / "agent-runtime"
+    write(runtime_binary, "#!/bin/sh\nexit 2\n")
+    runtime_binary.chmod(0o755)
+    runtime_config = temp / "runtime.json"
+    write(runtime_config, json.dumps({"version": 1, "tools": {"claude": {"argv": [str(binary)]}}}))
     profile = json.dumps({
         "binary": str(binary), "configTemplate": str(template),
         "credentialSources": credential_sources, "launchPrefix": "launcher",
+        "runtimeBinary": str(runtime_binary), "runtimeConfig": str(runtime_config),
     })
+    with_inventory = json.loads(profile)
+    with_inventory["inventory"] = {"agentRulesRoot": str(temp / "rules"),
+                                   "declaration": str(temp / "placement.md"),
+                                   "rules": [], "site": "S4"}
+    assert claude_code.profile(json.dumps(with_inventory))["inventory"]["site"] == "S4"
+    for missing in ("runtimeBinary", "runtimeConfig"):
+        invalid = json.loads(profile)
+        invalid.pop(missing)
+        try:
+            claude_code.profile(json.dumps(invalid))
+            raise AssertionError("missing runtime field was accepted: " + missing)
+        except SystemExit:
+            pass
+    invalid = json.loads(profile)
+    invalid["runtimeBinary"] = str(binary)
+    try:
+        claude_code.profile(json.dumps(invalid))
+        raise AssertionError("recursive runtime was accepted")
+    except SystemExit:
+        pass
+    write(runtime_config, json.dumps({"version": 1, "tools": {"claude": {"argv": [str(runtime_binary)]}}}))
+    try:
+        claude_code.profile(profile)
+        raise AssertionError("runtime vendor mismatch was accepted")
+    except SystemExit:
+        pass
+    write(runtime_config, json.dumps({"version": 1, "tools": {"claude": {"argv": [str(binary)]}}}))
     digest = claude_code.managed_digest(str(variant))
 
     def workspace(name):
@@ -135,6 +168,10 @@ fi
     assert "Claude project directory collision between workspaces" in collision.stderr
     assert prepared_a["variantDigest"] == digest
     assert "launcher" in prepared_a["launch"]
+    assert str(runtime_binary) in prepared_a["launch"]
+    assert " --config " + str(runtime_config) + " claude" in prepared_a["launch"]
+    assert "CLAUDE_CONFIG_DIR=" in prepared_a["launch"]
+    assert "CLAUDE_CONFIG_DIR=" + str(config_a) + " " + str(binary) not in prepared_a["launch"]
     assert "--add-dir" not in prepared_a["launch"]
     # A declared material has to be named at launch or the subject cannot read it.
     _, _, prepared_m = prepare("arm-m", [{"name": "records", "path": str(temp / "records")}])

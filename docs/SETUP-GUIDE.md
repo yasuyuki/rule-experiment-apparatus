@@ -14,6 +14,13 @@ Subject descriptor と同じ directory に adapter entrypoint を置き、その
 固定します。Adapter profile の内容、credential、実 user data は public repository に置きません。
 Core は profile value を解釈しません。
 
+Codex の `launchArgv` は固定 `agent-runtime --config <runtime.json> codex` を指定します。
+Claude profile は vendor の `binary` を version/auth 確認用に保持し、実行用の絶対 path
+`runtimeBinary` と `runtimeConfig` を別に指定します。`launchPrefix` は Windows から
+WSL への輸送だけを担います。両 subject の runtime config は新規 run の root と固定
+workspace-lifecycle entry/pins を宣言し、vendor の認証 source や arm ごとの config root は
+従来の adapter profile に残します。
+
 完成した cycle declaration は environment descriptor と同じ private control repository の
 `cycles/<cycle>.json` で version 管理します。Runtime state、credential、transcript は追跡しません。
 

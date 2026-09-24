@@ -84,12 +84,13 @@ def profile(raw):
         value = json.loads(raw)
     except (TypeError, ValueError) as error:
         raise SystemExit("invalid Claude adapter profile: %s" % error)
-    required = {"binary", "configTemplate", "credentialSources", "launchPrefix"}
+    required = {"binary", "configTemplate", "credentialSources", "launchPrefix",
+                "runtimeBinary", "runtimeConfig"}
     if not isinstance(value, dict) or set(value) - {"inventory"} != required:
         raise SystemExit("Claude adapter profile must contain only %s" % ", ".join(sorted(required)))
     if not all(
         isinstance(value[key], str) and value[key]
-        for key in ("binary", "configTemplate", "launchPrefix")
+        for key in ("binary", "configTemplate", "launchPrefix", "runtimeBinary", "runtimeConfig")
     ):
         raise SystemExit("Claude adapter profile values must be non-empty strings")
     sources = value["credentialSources"]
@@ -102,6 +103,21 @@ def profile(raw):
         value[key] = os.path.expanduser(value[key])
         if not os.path.isabs(value[key]):
             raise SystemExit("Claude adapter profile %s must be absolute or home-relative" % key)
+    for key in ("runtimeBinary", "runtimeConfig"):
+        if not os.path.isabs(value[key]):
+            raise SystemExit("Claude adapter profile %s must be absolute" % key)
+        if not os.path.isfile(value[key]):
+            raise SystemExit("Claude adapter profile %s is missing" % key)
+    if os.path.realpath(value["runtimeBinary"]) == os.path.realpath(value["binary"]):
+        raise SystemExit("Claude runtime must differ from vendor binary")
+    try:
+        with open(value["runtimeConfig"], encoding="utf-8") as handle:
+            runtime = json.load(handle)
+        vendor = runtime["tools"]["claude"]["argv"][0]
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        raise SystemExit("Claude runtime config has no vendor binding")
+    if not isinstance(vendor, str) or os.path.realpath(vendor) != os.path.realpath(value["binary"]):
+        raise SystemExit("Claude runtime vendor differs from version/auth binary")
     for name in CREDENTIALS:
         sources[name] = os.path.expanduser(sources[name])
         if not os.path.isabs(sources[name]):
@@ -132,7 +148,13 @@ def inventory_inputs(settings):
     spec.loader.exec_module(place)
     args = SimpleNamespace(declaration=str(declaration), rules=rule_paths, skills=[str(root / "skills")], site=binding["site"])
     context = place.load_context(args)
-    place.inventory_preflight(args, context, binding["site"], mode="construction", constructing_agent="claude")
+    # The controller invokes this adapter with WSL -e, which need not include
+    # the user's vendor directory in PATH. Resolve the declared vendor entry
+    # from its explicit profile path without changing the child launch PATH.
+    search_path = os.path.dirname(settings["binary"]) + os.pathsep + os.environ.get("PATH", "")
+    place.inventory_preflight(args, context, binding["site"],
+                              resolver=lambda name: shutil.which(name, path=search_path),
+                              mode="construction", constructing_agent="claude")
     site = context[2][binding["site"]]
     config = Path(context[0]["tools"]["claude"]["configHome"]["default"].replace("$HOME", site["home"]))
     paths = ("rules/agent-rules--environment-inventory-required.md", "skills/maintain-environment-inventory")
@@ -268,8 +290,9 @@ def prepare(payload, identity):
     extra = "".join(
         " --add-dir %s" % shlex.quote(material["path"]) for material in payload.get("materials", [])
     )
-    inner = "cd %s && CLAUDE_CONFIG_DIR=%s %s%s" % (
-        tuple(shlex.quote(value) for value in (workspace, config_root, settings["binary"])) + (extra,)
+    inner = "cd %s && CLAUDE_CONFIG_DIR=%s %s --config %s claude%s" % (
+        tuple(shlex.quote(value) for value in (workspace, config_root, settings["runtimeBinary"],
+                                               settings["runtimeConfig"])) + (extra,)
     )
     return {
         "protocolVersion": 1,

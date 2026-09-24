@@ -82,6 +82,21 @@ def profile(raw):
         if (not isinstance(value[name], list) or not value[name]
                 or not all(isinstance(arg, str) and arg for arg in value[name])):
             raise SystemExit("Codex %s must be a non-empty argv array" % name)
+    launch = value["launchArgv"]
+    if (len(launch) != 4 or launch[1] != "--config" or launch[3] != "codex"
+            or not os.path.isabs(launch[0]) or not os.path.isabs(launch[2])
+            or not os.path.isfile(launch[0]) or not os.path.isfile(launch[2])):
+        raise SystemExit("Codex launchArgv must name an installed runtime and absolute config")
+    if os.path.realpath(launch[0]) == os.path.realpath(value["binary"]):
+        raise SystemExit("Codex runtime must differ from vendor binary")
+    try:
+        with open(launch[2], encoding="utf-8") as handle:
+            runtime = json.load(handle)
+        vendor = runtime["tools"]["codex"]["argv"][0]
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        raise SystemExit("Codex runtime config has no vendor binding")
+    if not isinstance(vendor, str) or os.path.realpath(vendor) != os.path.realpath(value["binary"]):
+        raise SystemExit("Codex runtime vendor differs from version binary")
     return value
 
 
