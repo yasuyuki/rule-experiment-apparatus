@@ -4,6 +4,21 @@ Version control 下の experiment source に workload、evaluation、control / t
 置きます。Private control repository の `cycles/<cycle>.json` に exact Git tree と SHA-256 を固定します。
 必要なら declaration の非空 `note` に、この測り直しの目的を残します。
 
+実行前に、変更したい行動と判断基準を workload と evaluation に固定します。両 arm へ同じ
+課題と入力を渡し、rule 以外の差と観測できない結果を記録します。`review` の `promote`
+verdict は、評価 program が返す基準に改善があり、悪化と `unknown` がない場合だけです。
+rule の効果や本番適用の安全性を自動で証明するものではありません。
+calibration や stable に載せない内容を含む variant は、verdict が `promote` でも
+`promote` を実行しません。
+
+各 subject を control と treatment で一度ずつ起動するので、最小構成は subject ごとに
+2 回の agent 実行です。繰り返す場合は新しい cycle id を使い、その回数だけ増えます。
+実行前に各 CLI のモデル、入力・出力 token 上限、単価、実行時間の上限を調べ、両 arm と
+再試行分の予算を決めます。この装置には請求額の算出や予算到達時の停止機能はありません。
+`materialize` は base の arm workspace を2つと任意の materials を `runsRoot` に作り、
+実行時には CLI 固有の config、native transcript、成果物も増えます。空き容量を確認し、
+実行後は review record と必要な証拠を保全してから撤去範囲を判断します。
+
 ```console
 python3 apparatus/cycle.py --environment <environment.json> materialize --cycle <cycle>
 ```
@@ -30,6 +45,13 @@ digest での再実行だけが成功し、record は変更されません。終
 promote できません。既に review のある cycle は terminate できません。`terminate` は runtime
 `.adapter-state` を削除しないため、必要な調査はその state と arm を読み取りで行えます。
 同じ cycle の materialize、review、terminate が既に進行中なら、待機せず明示的に拒否されます。
+
+`materialize` が途中で失敗すると、`runsRoot/<cycle>` に部分的な arm が残る場合があり、
+同じ cycle id の再実行は拒否されます。残った arm と `.adapter-state` を調べ、続行しない
+cycle は `terminate` で記録します。再試行は原因を直して新しい cycle id で行います。
+`review` が失敗した場合は、宣言と variant bytes を変えずに原因を直せるか確認してから
+再実行します。`terminate` は arm や state を消しません。証拠を保全した後、所有者が
+`runsRoot`、CLI の config と transcript、private control の記録を別々に確認して撤去します。
 
 ```console
 python3 apparatus/cycle.py --environment <environment.json> terminate --cycle <cycle> --status abandoned --reason "operator stopped the run"
