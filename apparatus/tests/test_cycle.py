@@ -219,7 +219,7 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
     git_init(stable)
     write(stable / "bin" / "rules.py", RENDERER)
     write(stable / "placement.json", json.dumps(placement))
-    write(stable / "rules" / "demo.rule.md", "stable\n")
+    write(stable / "rules" / "demo.rule.md", "old\n")
     git_commit(stable, "stable")
 
     adapter = subjects / "fake_adapter.py"
@@ -518,7 +518,36 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         rollback = json.loads((control / "rollbacks" / "fixture.json").read_text(encoding="utf-8"))
         assert_schema(rollback, "rollback.schema.json")
         assert rollback["status"] == "rolled-back"
-        assert (stable / "rules" / "demo.rule.md").read_text() == "stable\n"
+        assert (stable / "rules" / "demo.rule.md").read_text() == "old\n"
+
+        write(cycles / "stale.json", json.dumps(declaration("stale")))
+        cycle.materialize("stale")
+        for arm in ("control", "treatment"):
+            workspace = runs / "stale" / arm
+            write(workspace / "result.txt", arm + "\n")
+            git_commit(workspace, "result")
+        cycle.review("stale")
+        write(stable / "rules" / "demo.rule.md", "newer\n")
+        git_commit(stable, "newer baseline")
+        cycle.promote("stale")
+        stale_promotion = json.loads((control / "promotions" / "stale.json").read_text(encoding="utf-8"))
+        assert stale_promotion["status"] == "not-promoted"
+        assert "stable managed bytes differ from control variant" in stale_promotion["reasons"]
+        assert (stable / "rules" / "demo.rule.md").read_text() == "newer\n"
+
+        write(cycles / "calibration.json", json.dumps(declaration("calibration")))
+        cycle.materialize("calibration")
+        for arm in ("control", "treatment"):
+            workspace = runs / "calibration" / arm
+            write(workspace / "result.txt", arm + "\n")
+            git_commit(workspace, "result")
+        cycle.review("calibration")
+        calibration_review = json.loads((control / "reviews" / "calibration.json").read_text(encoding="utf-8"))
+        assert calibration_review["verdict"] == "promote"
+        cycle.promote("calibration")
+        calibration_promotion = json.loads((control / "promotions" / "calibration.json").read_text(encoding="utf-8"))
+        assert calibration_promotion["status"] == "not-promoted"
+        assert (stable / "rules" / "demo.rule.md").read_text() == "newer\n"
 
         write(cycles / "drift.json", json.dumps(declaration("drift")))
         cycle.materialize("drift")
@@ -532,7 +561,7 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         rejected = json.loads((control / "promotions" / "drift.json").read_text(encoding="utf-8"))
         assert rejected["status"] == "not-promoted"
         assert any("reviewed bytes" in reason or "digest mismatch" in reason for reason in rejected["reasons"])
-        assert (stable / "rules" / "demo.rule.md").read_text() == "stable\n"
+        assert (stable / "rules" / "demo.rule.md").read_text() == "newer\n"
     finally:
         cycle.CYCLES_DIR, cycle.SUBJECTS_DIR = old_dirs
 

@@ -11,12 +11,14 @@ rule の効果や本番適用の安全性を自動で証明するものではあ
 calibration や stable に載せない内容を含む variant は、verdict が `promote` でも
 `promote` を実行しません。
 
-各 subject を control と treatment で一度ずつ起動するので、最小構成は subject ごとに
-2 回の agent 実行です。繰り返す場合は新しい cycle id を使い、その回数だけ増えます。
-実行前に各 CLI のモデル、入力・出力 token 上限、単価、実行時間の上限を調べ、両 arm と
-再試行分の予算を決めます。この装置には請求額の算出や予算到達時の停止機能はありません。
-`materialize` は base の arm workspace を2つと任意の materials を `runsRoot` に作り、
-実行時には CLI 固有の config、native transcript、成果物も増えます。空き容量を確認し、
+core 自身は LLM を呼びません。adapter や evaluation program に外部呼び出しを実装した
+場合は、その時間と token も装置側の増分として測ります。
+`materialize` は base の arm workspace を2つ、任意の materials を1組 `runsRoot` に
+作り、subject ごとの `prepare` を各 arm で呼びます。
+`review` は各 arm の `collect`、evaluation program、record 作成を行います。処理時間と
+容量は base、managed rule、materials、adapter の作業量に依存します。実験本体の
+agent 実行はこの増分に含めません。実行前後に `runsRoot` と private control の容量を測り、
+`materialize` と `review` の経過時間を記録すると、装置固有の負担を比較できます。
 実行後は review record と必要な証拠を保全してから撤去範囲を判断します。
 
 ```console
@@ -68,6 +70,6 @@ baseline の正規の状態遷移は維持します。再評価の扱いと現�
 [Protocol and records](RULE-EXPERIMENT.md)を参照してください。
 
 `promote` は treatment variant の、cycle 宣言時に凍結した bytes を stable へ載せます。
-その後に baseline が進んでいる cycle を promote すると、測定した rule 以外の placement と
-他 rule も古い snapshot で上書きします。現行 stable の bytes と宣言時 treatment が一致して
-いる cycle だけを promote してください。
+昇格前に現行 stable の managed digest と宣言済み control の digest を照合します。
+一致しなければ `not-promoted` と記録し、stable は変更しません。baseline が進んだ場合は
+現行 stable を control にした新しい cycle で評価します。

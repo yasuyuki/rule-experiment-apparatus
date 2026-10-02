@@ -5,7 +5,8 @@ Python 3.10+、Git、Bash と `apparatus/requirements.txt` の依存を用意し
 
 まず README の課金なしの検査を POSIX host で実行します。Windows では WSL 内の
 checkout と Python 環境から実行します。この検査は fake subject の一時 repository
-だけを使います。agent CLI の認証、rule 効果、実際の所要時間や請求額は検証しません。
+だけを使います。agent CLI の認証、rule 効果、実際の repository での処理時間や容量は
+検証しません。
 
 実際の cycle には、以下の独立した入力を用意します。
 
@@ -14,7 +15,7 @@ checkout と Python 環境から実行します。この検査は fake subject �
 - 安定版の rule-source repository と、利用する subject の adapter profile
 - private control repository と、arm を実行する隔離済みの `runsRoot`
 
-実験前に [Operator guide](USER-GUIDE.md) の費用と成果物の確認を行います。
+実験前に [Operator guide](USER-GUIDE.md) の装置が追加する作業と成果物を確認します。
 
 `apparatus/schemas/environment.example.json` を private control repository へコピーし、次を設定します。
 

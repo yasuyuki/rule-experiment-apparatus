@@ -893,6 +893,7 @@ def promotion_reasons(cycle_name, declaration, record):
 def promote(cycle_name):
     declaration = load_cycle(cycle_name)
     reject_terminated(cycle_name)
+    control = next(arm for arm in declaration["arms"] if arm["role"] == "control")
     treatment = next(arm for arm in declaration["arms"] if arm["role"] == "treatment")
     review_file = os.path.join(CONTROL_DIR, "reviews", "%s.json" % cycle_name)
     if not os.path.isfile(review_file):
@@ -921,6 +922,8 @@ def promote(cycle_name):
         if record["status"] == "not-promoted":
             print("not promoted: %s" % "; ".join(record["reasons"]))
             return
+        if record["oldManagedDigest"] != control["variantDigest"] or old_digest != control["variantDigest"]:
+            raise SystemExit("stable managed bytes differ from control variant")
         if old_head == record["oldStableCommit"]:
             git_host(stable, "merge", "--ff-only", record["newStableCommit"])
         elif old_head != record["newStableCommit"]:
@@ -936,6 +939,8 @@ def promote(cycle_name):
     reasons.extend(verify_canonical(declaration, treatment))
     if target_digest != review_record.get("treatmentDigest"):
         reasons.append("current treatment source bytes differ from reviewed bytes")
+    if old_digest != control["variantDigest"]:
+        reasons.append("stable managed bytes differ from control variant")
     if git_host(stable, "status", "--porcelain").stdout.strip():
         reasons.append("stable worktree is dirty")
     if git_host(stable, "branch", "--show-current").stdout.strip() != branch:
