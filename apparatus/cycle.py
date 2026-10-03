@@ -922,11 +922,16 @@ def promote(cycle_name):
         if record["status"] == "not-promoted":
             print("not promoted: %s" % "; ".join(record["reasons"]))
             return
-        if record["oldManagedDigest"] != control["variantDigest"] or old_digest != control["variantDigest"]:
+        if record["oldManagedDigest"] != control["variantDigest"]:
             raise SystemExit("stable managed bytes differ from control variant")
         if old_head == record["oldStableCommit"]:
+            if old_digest != control["variantDigest"]:
+                raise SystemExit("stable managed bytes differ from control variant")
             git_host(stable, "merge", "--ff-only", record["newStableCommit"])
-        elif old_head != record["newStableCommit"]:
+        elif old_head == record["newStableCommit"]:
+            if old_digest != record["treatmentDigest"]:
+                raise SystemExit("stable bytes differ from prepared promotion")
+        else:
             raise SystemExit("stable HEAD does not match prepared promotion")
         if managed_digest(stable)[0] != record["treatmentDigest"]:
             raise SystemExit("stable bytes differ from prepared promotion")

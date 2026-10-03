@@ -275,6 +275,15 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
             ],
         }
 
+    def reviewed_cycle(name):
+        write(cycles / (name + ".json"), json.dumps(declaration(name)))
+        cycle.materialize(name)
+        for arm in ("control", "treatment"):
+            workspace = runs / name / arm
+            write(workspace / "result.txt", arm + "\n")
+            git_commit(workspace, "result")
+        cycle.review(name)
+
     write(cycles / "fixture.json", json.dumps(declaration("fixture")))
     old_dirs = cycle.CYCLES_DIR, cycle.SUBJECTS_DIR
     cycle.configure_environment(str(environment_path))
@@ -519,6 +528,93 @@ with tempfile.TemporaryDirectory(prefix="cycle-fixture-") as raw:
         assert_schema(rollback, "rollback.schema.json")
         assert rollback["status"] == "rolled-back"
         assert (stable / "rules" / "demo.rule.md").read_text() == "old\n"
+
+        # An interruption after preparing a promotion must be retryable from either HEAD.
+        reviewed_cycle("retry-before-ff")
+        before_head = git_value(stable, "rev-parse", "HEAD")
+        original_git_host = cycle.git_host
+
+        def interrupt_before_ff(root, *args, **kwargs):
+            if str(root) == str(stable) and args[:2] == ("merge", "--ff-only"):
+                raise SystemExit("simulated interruption before fast-forward")
+            return original_git_host(root, *args, **kwargs)
+
+        cycle.git_host = interrupt_before_ff
+        try:
+            assert_rejected(
+                lambda: cycle.promote("retry-before-ff"),
+                "simulated interruption before fast-forward",
+            )
+        finally:
+            cycle.git_host = original_git_host
+        before_file = control / "promotions" / "retry-before-ff.json"
+        before_record = json.loads(before_file.read_text(encoding="utf-8"))
+        assert before_record["status"] == "prepared"
+        assert git_value(stable, "rev-parse", "HEAD") == before_head
+        write(stable / "rules" / "demo.rule.md", "unexpected\n")
+        assert_rejected(
+            lambda: cycle.promote("retry-before-ff"),
+            "stable managed bytes differ from control variant",
+        )
+        assert json.loads(before_file.read_text(encoding="utf-8"))["status"] == "prepared"
+        write(stable / "rules" / "demo.rule.md", "old\n")
+        cycle.promote("retry-before-ff")
+        assert json.loads(before_file.read_text(encoding="utf-8"))["status"] == "promoted"
+        assert git_value(stable, "rev-parse", "HEAD") == before_record["newStableCommit"]
+        cycle.rollback("retry-before-ff")
+        assert (stable / "rules" / "demo.rule.md").read_text() == "old\n"
+
+        reviewed_cycle("retry-after-ff")
+        original_write = cycle.atomic_write_json
+
+        def interrupt_after_ff(path, payload):
+            if path == cycle.promotion_path("retry-after-ff") and payload["status"] == "promoted":
+                raise SystemExit("simulated interruption after fast-forward")
+            return original_write(path, payload)
+
+        cycle.atomic_write_json = interrupt_after_ff
+        try:
+            assert_rejected(
+                lambda: cycle.promote("retry-after-ff"),
+                "simulated interruption after fast-forward",
+            )
+        finally:
+            cycle.atomic_write_json = original_write
+        after_file = control / "promotions" / "retry-after-ff.json"
+        after_record = json.loads(after_file.read_text(encoding="utf-8"))
+        assert after_record["status"] == "prepared"
+        assert git_value(stable, "rev-parse", "HEAD") == after_record["newStableCommit"]
+        write(stable / "rules" / "demo.rule.md", "unexpected\n")
+        assert_rejected(
+            lambda: cycle.promote("retry-after-ff"),
+            "stable bytes differ from prepared promotion",
+        )
+        assert json.loads(after_file.read_text(encoding="utf-8"))["status"] == "prepared"
+        write(stable / "rules" / "demo.rule.md", "new\n")
+        cycle.promote("retry-after-ff")
+        assert json.loads(after_file.read_text(encoding="utf-8"))["status"] == "promoted"
+        cycle.rollback("retry-after-ff")
+        assert (stable / "rules" / "demo.rule.md").read_text() == "old\n"
+
+        reviewed_cycle("retry-moved-head")
+        cycle.git_host = interrupt_before_ff
+        try:
+            assert_rejected(
+                lambda: cycle.promote("retry-moved-head"),
+                "simulated interruption before fast-forward",
+            )
+        finally:
+            cycle.git_host = original_git_host
+        moved_file = control / "promotions" / "retry-moved-head.json"
+        write(stable / "UNRELATED.md", "other change\n")
+        git_commit(stable, "move stable HEAD")
+        moved_head = git_value(stable, "rev-parse", "HEAD")
+        assert_rejected(
+            lambda: cycle.promote("retry-moved-head"),
+            "stable HEAD does not match prepared promotion",
+        )
+        assert git_value(stable, "rev-parse", "HEAD") == moved_head
+        assert json.loads(moved_file.read_text(encoding="utf-8"))["status"] == "prepared"
 
         write(cycles / "stale.json", json.dumps(declaration("stale")))
         cycle.materialize("stale")
