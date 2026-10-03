@@ -5,8 +5,10 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
+import uuid
 
 
 if os.name != "nt":
@@ -106,7 +108,7 @@ with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
         "adapter": {"entrypoint": "fake_adapter.py", "sha256": adapter_sha},
         "profileRef": "fake",
     }))
-    runs_root = "/tmp/rule-experiment-wsl-materialize"
+    runs_root = "/tmp/rule-experiment-wsl-materialize-" + uuid.uuid4().hex
     environment = {
         "executor": {
             "kind": "wsl", "distro": os.environ.get("APPARATUS_WSL_DISTRO", "Ubuntu-24.04"),
@@ -154,7 +156,7 @@ with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
     cycle.configure_environment(str(environment_path))
     assert Path(cycle.CYCLES_DIR) == cycles
     cycle.SUBJECTS_DIR = str(subjects)
-    cycle.exec_("rm -rf -- %s" % runs_root)
+    cycle.exec_("mkdir -- %s" % shlex.quote(runs_root))
     try:
         cycle.materialize("wsl-materialize")
         output = cycle.exec_("sha256sum %s/wsl-materialize/{control,treatment}/.rules/demo.txt" % runs_root)
@@ -179,7 +181,7 @@ with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
         else:
             raise AssertionError("a modified material was accepted")
     finally:
-        cycle.exec_("rm -rf -- %s" % runs_root)
+        cycle.exec_("rm -rf -- %s" % shlex.quote(runs_root))
         cycle.CYCLES_DIR, cycle.SUBJECTS_DIR = old_dirs
 
 print("WSL materialization fixture: ok")

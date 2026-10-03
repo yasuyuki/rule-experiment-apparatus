@@ -18,6 +18,25 @@ Claude adapter の profile は任意の `inventory` binding を受け付けま�
 共通配置し、configIdentity に含めます。variant、baseline、既存 evidence は変更しません。
 設定を持たない独立した利用者の profile は従来どおりです。
 
+## 課金なしで最初に試す
+
+POSIX host で依存を隔離した Python 環境を用意し、次の検査を実行します。
+`test_cycle.py` は一時ディレクトリの fake subject で materialize、review、promote、
+rollback、失敗時の拒否を試し、実際の agent CLI は起動しません。
+
+```console
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r apparatus/requirements.txt
+python apparatus/docs_check.py
+python apparatus/cycle.py --selfcheck
+python apparatus/tests/test_cycle.py
+```
+
+Windows controller では POSIX 検査を WSL 内で実行します。実際の二腕実験に必要な
+private 設定と費用の確認は [Setup guide](docs/SETUP-GUIDE.md) と
+[Operator guide](docs/USER-GUIDE.md) を参照してください。
+
 ## Documents
 
 - [Constitution](CONSTITUTION.md)

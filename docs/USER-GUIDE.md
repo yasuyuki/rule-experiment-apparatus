@@ -4,6 +4,23 @@ Version control 下の experiment source に workload、evaluation、control / t
 置きます。Private control repository の `cycles/<cycle>.json` に exact Git tree と SHA-256 を固定します。
 必要なら declaration の非空 `note` に、この測り直しの目的を残します。
 
+実行前に、変更したい行動と判断基準を workload と evaluation に固定します。両 arm へ同じ
+課題と入力を渡し、rule 以外の差と観測できない結果を記録します。`review` の `promote`
+verdict は、評価 program が返す基準に改善があり、悪化と `unknown` がない場合だけです。
+rule の効果や本番適用の安全性を自動で証明するものではありません。
+calibration や stable に載せない内容を含む variant は、verdict が `promote` でも
+`promote` を実行しません。
+
+core 自身は LLM を呼びません。adapter や evaluation program に外部呼び出しを実装した
+場合は、その時間と token も装置側の増分として測ります。
+`materialize` は base の arm workspace を2つ、任意の materials を1組 `runsRoot` に
+作り、subject ごとの `prepare` を各 arm で呼びます。
+`review` は各 arm の `collect`、evaluation program、record 作成を行います。処理時間と
+容量は base、managed rule、materials、adapter の作業量に依存します。実験本体の
+agent 実行はこの増分に含めません。実行前後に `runsRoot` と private control の容量を測り、
+`materialize` と `review` の経過時間を記録すると、装置固有の負担を比較できます。
+実行後は review record と必要な証拠を保全してから撤去範囲を判断します。
+
 ```console
 python3 apparatus/cycle.py --environment <environment.json> materialize --cycle <cycle>
 ```
@@ -31,6 +48,13 @@ promote できません。既に review のある cycle は terminate できま�
 `.adapter-state` を削除しないため、必要な調査はその state と arm を読み取りで行えます。
 同じ cycle の materialize、review、terminate が既に進行中なら、待機せず明示的に拒否されます。
 
+`materialize` が途中で失敗すると、`runsRoot/<cycle>` に部分的な arm が残る場合があり、
+同じ cycle id の再実行は拒否されます。残った arm と `.adapter-state` を調べ、続行しない
+cycle は `terminate` で記録します。再試行は原因を直して新しい cycle id で行います。
+`review` が失敗した場合は、宣言と variant bytes を変えずに原因を直せるか確認してから
+再実行します。`terminate` は arm や state を消しません。証拠を保全した後、所有者が
+`runsRoot`、CLI の config と transcript、private control の記録を別々に確認して撤去します。
+
 ```console
 python3 apparatus/cycle.py --environment <environment.json> terminate --cycle <cycle> --status abandoned --reason "operator stopped the run"
 ```
@@ -46,6 +70,6 @@ baseline の正規の状態遷移は維持します。再評価の扱いと現�
 [Protocol and records](RULE-EXPERIMENT.md)を参照してください。
 
 `promote` は treatment variant の、cycle 宣言時に凍結した bytes を stable へ載せます。
-その後に baseline が進んでいる cycle を promote すると、測定した rule 以外の placement と
-他 rule も古い snapshot で上書きします。現行 stable の bytes と宣言時 treatment が一致して
-いる cycle だけを promote してください。
+昇格前に現行 stable の managed digest と宣言済み control の digest を照合します。
+一致しなければ `not-promoted` と記録し、stable は変更しません。baseline が進んだ場合は
+現行 stable を control にした新しい cycle で評価します。
