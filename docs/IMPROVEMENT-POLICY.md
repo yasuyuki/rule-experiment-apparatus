@@ -35,6 +35,8 @@ For every existing or proposed element, prefer, in this order:
 
 Existing code, documents, abstractions, compatibility, and historical effort are not reasons to keep something.
 
+Apply the [product compatibility and data migration policy](../CONSTITUTION.md#product-compatibility-and-data-migration). Backward compatibility is not a retention requirement. Incompatible persistent-data changes support forward conversion from only the immediately preceding data-format generation. Asset protection and current operational contracts remain required.
+
 Justify a requirement, check, record, repair, or rerun by the decision it enables or the specific error or harm it prevents. Its presence in a specification, schema, test, or invariant is not sufficient justification for retaining it unchanged. Reconsider both the guarantee's scope and the cost of providing it. Revise contracts deliberately rather than bypassing them during execution.
 
 When evidence is incomplete or conditions deviate, first consider reuse of existing evidence, reevaluation of saved artifacts, and a narrower conclusion. Restrict the affected observation, inference, or operation instead of discarding unrelated evidence or requiring complete repair and repetition by default. Missing information is not success, and stating a limitation does not make a confounded comparison valid.
