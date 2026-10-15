@@ -1,0 +1,14 @@
+[
+  {
+    "app": "github-actions",
+    "name": "apparatus"
+  },
+  {
+    "app": "github-actions",
+    "name": "codex-telemetry-query"
+  },
+  {
+    "app": "github-actions",
+    "name": "wsl-executor"
+  }
+]
