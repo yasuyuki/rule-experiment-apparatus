@@ -14,13 +14,17 @@
           "properties": {
             "kind": { "const": "wsl" },
             "distro": { "type": "string", "minLength": 1 },
-            "user": { "type": "string", "minLength": 1 }
+            "user": { "type": "string", "minLength": 1 },
+            "python": { "type": "string", "minLength": 1 }
           }
         },
         {
           "type": "object", "additionalProperties": false,
           "required": ["kind"],
-          "properties": { "kind": { "const": "local-posix" } }
+          "properties": {
+            "kind": { "const": "local-posix" },
+            "python": { "type": "string", "minLength": 1 }
+          }
         }
       ]
     },

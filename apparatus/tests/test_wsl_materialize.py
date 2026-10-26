@@ -53,9 +53,11 @@ open(target, "wb").write(open(os.path.join(root, "rules", "demo.rule.md"), "rb")
 '''
 
 ADAPTER = '''import hashlib, json, os, subprocess, sys
+if sys.version_info < (3, 14):
+    raise SystemExit("adapter ran under %s, not the declared executor Python" % sys.version.split()[0])
 payload = json.load(sys.stdin)
 identity = hashlib.sha256(open(__file__, "rb").read()).hexdigest()
-subprocess.run(["python3", os.path.join(payload["variant"]["path"], "bin", "rules.py"),
+subprocess.run([sys.executable, os.path.join(payload["variant"]["path"], "bin", "rules.py"),
                 "render", payload["workspace"]], check=True)
 placed = os.path.join(payload["workspace"], ".rules", "demo.txt")
 print(json.dumps({
@@ -113,6 +115,7 @@ with tempfile.TemporaryDirectory(prefix="cycle-wsl-") as raw:
         "executor": {
             "kind": "wsl", "distro": os.environ.get("APPARATUS_WSL_DISTRO", "Ubuntu-24.04"),
             "user": os.environ.get("APPARATUS_WSL_USER", "root"),
+            "python": os.environ.get("APPARATUS_WSL_PYTHON", "python3"),
         },
         "variantSourceRoot": str(source),
         "stableRules": {"root": str(base), "branch": "main"},

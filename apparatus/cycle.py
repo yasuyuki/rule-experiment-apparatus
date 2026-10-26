@@ -493,7 +493,7 @@ def state_path(cycle_name):
 
 def _run_json_program(path, operation, payload):
     result = run_executor(
-        ["python3", to_executor_path(path), operation],
+        [load_environment()["executor"].get("python", "python3"), to_executor_path(path), operation],
         stdin=json.dumps(payload, ensure_ascii=False), check=False,
     )
     if result.returncode != 0:
