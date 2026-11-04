@@ -35,7 +35,7 @@ For every existing or proposed element, prefer, in this order:
 
 Existing code, documents, abstractions, compatibility, and historical effort are not reasons to keep something.
 
-Apply the [product compatibility and data migration policy](../CONSTITUTION.md#product-compatibility-and-data-migration). Backward compatibility is not a retention requirement. Incompatible persistent-data changes support forward conversion from only the immediately preceding data-format generation. Asset protection and current operational contracts remain required.
+Backward compatibility is not a retention requirement. The compatibility and data-migration norm of the [common charter](https://github.com/yasuyuki/agent-rules/blob/main/skills/common-charter/SKILL.md) applies, as the Constitution's shared norms state.
 
 Justify a requirement, check, record, repair, or rerun by the decision it enables or the specific error or harm it prevents. Its presence in a specification, schema, test, or invariant is not sufficient justification for retaining it unchanged. Reconsider both the guarantee's scope and the cost of providing it. Revise contracts deliberately rather than bypassing them during execution.
 
@@ -49,32 +49,10 @@ Apply the improvement order to end-to-end work, including work imposed on humans
 
 Promotion must remain limited to preserving the identity, integrity, and provenance of the validated result while establishing it as the new stable baseline.
 
-## User waiting and resource limits
+## Shared norms in the apparatus
 
-Meet necessary safety and quality requirements, then assess time, cost, rework, and user burden against the actual operating decision. Do not require every measured indicator to improve simultaneously. An authorized, proportionate cost increase may be acceptable for a useful reduction in time or burden; this is not permission to exceed resource limits or ignore a required quality regression. Separate supporting measurements from criteria required for adoption, and do not change a fixed evaluation after seeing results to favor a candidate.
+The [common charter](https://github.com/yasuyuki/agent-rules/blob/main/skills/common-charter/SKILL.md) governs user waiting, resource limits and normal-path acceptance for this apparatus, as for every managed product. This policy keeps only what those norms mean for experiments.
 
-Evaluator repair, evidence organization, and measurement are supporting work. Return their findings to the original decision: what is now supported, what remains unresolved, and which specific missing evidence could change the choice. Finishing supporting work is not finishing the adoption decision. Do not make a new experiment the automatic next step or continue refining the apparatus when existing evidence can support the needed decision.
+Evaluator repair, evidence organization, and measurement are supporting work. Return their findings to the adoption decision. Do not make a new experiment the automatic next step or continue refining the apparatus when existing evidence can support the needed decision.
 
-Assume that the user will not wait and is not willing to wait. Avoidable waiting, monitoring, and repeated intervention are usability defects even when an operation eventually succeeds. Do not require the user to restate this assumption or set a time budget for every task. Keeping initial setup and repair separate from routine use does not exempt them from reducing avoidable waiting.
-
-Start from the ideal path with no avoidable user waiting. Apply the improvement order to remove unnecessary work and dependencies before accelerating retained steps. Within required quality, safety, approvals, and applicable cost and resource limits, prioritize reducing both elapsed time from the user's request to a usable result and the time during which the user is blocked from useful work. Speed is not an unlimited spending mandate. Early acknowledgement or returning control alone is not acceptance.
-
-For irreducibly long operations, minimize necessary blocking and allow genuinely independent work to proceed. Use existing execution and result-retrieval paths so the user need not poll, reconstruct state, or return to advance mechanical steps. Do not claim that submission is completion, or treat deferred work still blocking the requested result as eliminated waiting.
-
-Choose operation-appropriate latency targets when improving a path, rather than accepting its current duration as necessary. Apply established budgets and resource allowances alongside these targets. Judge the path with representative observations and reusable evidence, making unavoidable waits and any timing exclusions explicit. Numeric limits belong to the affected operation or approved operating profile, not to a universal threshold here.
-
-Additional spend or scarce usage is justified only by a meaningful, proportionate reduction in time to a usable result or user burden, and must remain within authorized limits. Budget headroom is not a target to consume. Evaluate total resources across preparation, management, handoffs, implementation, review, retries, validation, and result delivery, not only one model's unit price or one stage's duration. Include one-time improvement effort and realistic recurring costs where they affect the decision. Distinguish reference cost estimates, actual charges, and consumption of limited usage allowances; missing measurements are not zero cost.
-
-Reuse established budgets, approved operating profiles, and available evidence. Do not infer authorization for materially higher spending, greater usage, premium tiers, extra agents, or speculative duplicate runs merely from an instruction to be fast. Where a material increase is not covered by existing authorization, use an authorized lower-resource path if it meets the requirements, or surface the specific trade-off before incurring the increase. Do not require a new budget question for routine actions already within authorization. If the latency target cannot be met within the applicable limits, report the unmet target rather than silently exceeding a limit or declaring acceptance.
-
-Preserve necessary protections and approvals, evidence integrity, adoption identity, and responsibility boundaries. Apply the currently effective contract at the operations it protects; deliberately revise unnecessary requirements rather than silently bypassing them. Speed and deferral must not relabel pending required validation as completed, while incomplete supporting diagnostics must not block unrelated safe analysis or result delivery. Do not add orchestration or budget-management layers, per-task checklists, cost reports, or duplicate records merely to assert this principle.
-
-## Normal-path acceptance
-
-When changing a normal entry point or the rules governing it, check the affected path with representative use after initial setup. Humans should not need to reconstruct environment-specific commands; controller agents should not need to rebuild routine state from multiple histories or repeatedly explain the same mechanical checks. Keep task-relevant specifications and evidence available on demand.
-
-Apply the currently effective contract at the operations it protects, including necessary revalidation after relevant state changes. Unrelated diagnostics must not become blanket prerequisites. Keep first-time setup, migration inventories, and incident repair distinct from routine use.
-
-Use existing tests and evidence where possible. These are acceptance criteria for system changes, not new per-task gates, declarations, reports, or review records. Do not modify the Subject workload or evaluated instruction bytes to demonstrate compliance. Assess reductions in repeated work, time to a usable result, and user blocking within the applicable cost and resource limits; do not treat hidden output, early acknowledgement, work transferred to another agent, or unaccounted resource increases as sufficient.
-
-Assess whether the affected path returns usable evidence, an appropriately bounded conclusion, and the next decision without avoidable repair or repetition. Documentation of uncertainty, a rejected candidate, or a bounded inconclusive result may be a valid return; it is not automatic promotion or proof of equivalence. Use existing evidence to check this behavior where sufficient. Do not require new subject runs merely to demonstrate adherence to this policy, or encode the policy's prose as mandatory string matches.
+Do not modify the Subject workload or evaluated instruction bytes to demonstrate compliance with these norms, and do not require new subject runs merely to demonstrate adherence. Documentation of uncertainty, a rejected candidate, or a bounded inconclusive result may be a valid return; it is not automatic promotion or proof of equivalence.
