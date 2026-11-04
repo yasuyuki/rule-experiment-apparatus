@@ -80,9 +80,12 @@ sanitized evidence reference を所有します。
 [common-charter](https://github.com/yasuyuki/agent-rules/blob/main/skills/common-charter/SKILL.md)
 が正本であり、本装置にも適用されます。互換性とデータ移行、通常利用の透過性、
 利用者の待ち時間と資源、通常経路の受入がこれに当たります。憲章文書はその写しを持たず、
-装置に固有の目的・責務境界・不変条件だけを定めます。
+装置に固有の目的・責務境界・不変条件だけを定めます。参照先は main の現行版であり、
+共通規範の改訂は本装置にもそのまま及びます。
 
-共通規範を理由に、apparatus core が他製品の実装・移行処理や CLI lifecycle を所有することは
+通常利用の透過性は、本装置の Purpose を達成するための必須品質要件でもあります。
+Boundary を維持し、責務を持つ層で満たします。共通規範を適用しても、評価対象と採用対象の
+同一性は維持します。共通規範を理由に、apparatus core が他製品の実装・移行処理や CLI lifecycle を所有することは
 ありません。互換性を変える改訂でも、baseline の正規の promote／rollback 経路は廃止しません。
 保存済みの実験記録を将来の形式で参照する場合は、原記録と変換後の表現を区別し、旧 verdict や
 採用権限を遡及的に変えません。透過性などの遵守を示すために、Subject の workload や評価対象の
